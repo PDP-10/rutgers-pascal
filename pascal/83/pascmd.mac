@@ -1,0 +1,2457 @@
+	title PASCMD - interface to COMND jsys for Pascal-20
+
+	search pasunv,monsym,macsym
+
+	twoseg
+
+	sall
+	.direc	sfcond
+	.direc	flblst
+
+ifn tops10,<search uuosym>
+
+	;[1] 19-OCT-79 17:20:24 Added PA2040 conditionals for KI TENEX.
+	;			New routine, cmuerr, for user errors.
+	;			Fixed bug to clear FDB on reparse.
+	;[2] 6-May-80 by Britt  Fixed bug in CMATOM
+	;[3] 13-Sep-80		Added CMRSCAN
+	;[4] 9-Aug-81 RsM	Added CMIOJ
+	;[5] 11-Aug-81 RsM	Add CMBRK, BRINI and BRMSK (Tops-20 only)
+	;[6] 18-Aug-81 RsM	Add CMSTAT (Tops-20 only?)
+	;[7] 19-Aug-81 RsM	Add CMEOF
+	;[8] 5-Sep-81 RsM	Add CMFNI and CMFNIR
+	;[9] 28-Nov-81 RjL	fix to allow cmult to work with cmtok
+	;[10] 7-Dec-81 RsM	Add CMRSCN
+	;[11] 27-Oct-82 RsM	Add CMCTOK a character token
+	;[12] 2-Dec-82 RsM	Add CMUQS a unqioted string
+
+;currently the following combinations of switches are supported
+;  tops10 - UUO's
+;  -tops10 - JSYS's
+;  simcom - simulate of comnd and tbadd using code in this module
+;  -simcom - uses jsys's or pa2050
+;  tenex - use pa2050
+;tops10:  tops10,simcom
+;tops20:  -tops10,-simcom,-tenex
+;tenex:   -tops10,-simcom,tenex
+;In principle, I should support tenex sites not having pa2050, with
+;the following:  -tops10,simcom
+;But that code is not yet written.  Tenex should only be relevant
+;under -simcom.
+
+ifn tops10,<simcom==1>  ;simulate command jsys if tops10
+ife tops10,<simcom==0>  ;use real command jsys (or pa2050) if tops20
+
+ife tops10,<
+ifn tenex,<
+opdef tbadd%[call $$tbadd] ;[1] subroutine call for TENEX
+opdef comnd%[call $$comnd] ;[1]
+>
+>
+
+ife klcpu,<
+define	adjbp7	(reg,effadr) <	;[1]
+	push p,reg+1		;[1] save register
+	idivi reg,5		;[1] bytes/5 in a, bytes mod 5 in b
+	add reg,effadr		;[1] number of words
+	jumple reg+1,.+3	;[1] skip if multiple of 5 characters 
+	ibp reg			;[1]
+	sojg reg+1,.-1		;[1]
+	pop p,reg+1		;[1] restore reg
+
+ >> ;ife klcpu
+ifn klcpu,<
+opdef adjbp7[adjbp]
+ > ;ifn klcpu
+
+
+	entry cmctok		;[11]
+	entry cmfni,cmfnir
+	entry cmini,cmifi,cmofi,cmfil,cmcfm,cmkey,cmuerr
+	entry cmnum,cmnum8,cmnoi,cmswi
+	entry cmauto,cmerrmsg,cmerr,cmhlp,cmdef,cmagain
+	entry cmeof		;[7]
+	entry cmatom,cmfld,cmtxt,cmqst,cmact,cmnod
+	entry cmdir,cmdirw,cmusr,cmflt,cmdev
+	entry cmcma,cmt,cmd,cmtad,cmtn,cmdn,cmtadn
+	entry cmnux,cmnux8,cmtok
+	entry tbmak
+if2,<	entry tbadd>
+	entry gjgen,gjdev,gjdir,gjnam,gjext,gjpro,gjact,gjjfn
+	entry cmmult,cmreal,cmint,cmdo
+	entry cminir,cmmode	;[3]
+	entry cmioj		;[4]
+	entry cmbrk,brini,brmsk	;[5]
+	entry cmstat		;[6]
+	entry cmrscn		;[10]
+	entry cmuqs		;[12]
+
+	extern	endl, initz.
+ife tops10,<extern	relcl.,new.l	;[260]
+	inew==new.l>
+ifn tops10,<extern	cmpars, cmdird, relcl., .%adgb,new
+	inew==new>
+ife tops10,<ifn tenex,<extern	$$tbadd, $$comnd>>
+ifn klcpu,<extern	sn.cod>
+
+bufsiz==^D200	;[12]size of text buffer in words
+abufsz==^D20	;size of atom buffer in words
+files==^D40	;number of files that can be parsed in one command
+prmsiz==^D20	;maximum size of prompt
+argsiz==^D2000	;[9] size of area for string arguments
+
+	reloc 0
+
+ ;the following must be contiguous, as the are initilized from stini
+inibeg:
+state:	block .cmgjb+1	;state block
+curfil:	z		;pointer into filstk for last file gtjfn'ed
+curhlp:	block 1
+iniend==.-1
+savflg:	0			;[8] .cmflg flags
+ ;the following must also be contiguous, they are zeroed
+zerbeg:
+ifn simcom,<
+errstr:	block 1		;addr of error string
+>
+fdb:	block .cmbrk+1	;[5] function descriptor block
+erOK:	block 1		;user will handle errors himself
+erseen:	block 1		;an error has actually occured
+eofok:	block 1		;[7] user will handle eof
+eofflg:	block 1		;[7] an eof has occured
+mulnxt:	block 1		;addr of next FDB in mulfdb - 0 if not in mult mode
+zerend==.-1
+ ;end contiguous section
+savebc:	block 2		;saved value of B and C in CMINIR
+iniret:	block 1		;return address for CMINIR
+rscanf:	block 1		;0 - first time
+			;1 - one rscanned command done
+			;-1 - known not to be in rscan mode
+errabt:	block 1		;non-zero means in RSCAN mode or such-like, and
+			;we want to abort on any attempted reparse
+ffcb:	block filcmp+1	;fake file control block
+gjfblk:	block .gjatr+1	;extended gtjfn block for file name functions
+txtbuf:	block bufsiz	;text buffer
+txtend:
+atbuf:	block abufsz	;atom buffer
+prmbuf:	block prmsiz	;copy of prompt
+filstk:	block files	;place to store files we have gtjfn'ed
+argbuf:	block argsiz	;place to put user arguments, help, and default
+argend: block 1		;word after arg buffer
+nxtarg: block 1		;[9] byte pointer to next free arg slot
+usrret:	block 1
+stkret:	block 2
+ ;variables to be used for linked functions (multiple)
+m.fdb==0	;[5] fdb itself
+m.disp==.cmbrk+1 ;[5] where to go if it is this option
+m.loc==m.disp+1 ;[5] local storage for this option (2 words)
+m.size==m.loc+2	;[5]
+mulfdb:	block 12*m.size	;[5]
+mulend=.
+mulret:	block 1	;value to be returned
+
+	reloc 400000
+
+stini:	xwd 0,repars	;state block initialized to this
+	xwd .priin,.priou
+	xwd -1,prmbuf
+	xwd -1,txtbuf
+	xwd -1,txtbuf
+	exp bufsiz*5
+	z
+	xwd -1,atbuf
+	exp abufsz*5
+	exp gjfblk
+	exp filstk+files ;initial value for curfil
+	z		;initial value for pointer to help area
+	subttl cmini - put out prompt and prepare for reparse
+
+;[3] begin
+
+igntbl:	xwd 3,3		;table of commands that mean no rescanned data
+	xwd [asciz /ERUN/],1
+	xwd [asciz /RUN/],1
+	xwd [asciz /START/],1
+
+;cmmode --> cmmodes
+;  return one of
+;    0 if normal
+;    1 if in rscan mode
+cmmode:	setz a,			;assume normal
+	skiple rscanf
+	movei a,1		;but if seen rescanned command, use 1
+	movem a,1(p)
+	ret
+
+;[10] cmrscn - clear the rescan flag so next time CMINIR will rescan
+cmrscn:	setzm ,rscanf		;[10] reset flag
+	ret			;[10] end of cmrscn
+
+;[8] cmfnir('prompt',cmflg);
+;cminir('prompt string');
+;  special CMINI that accepts rescanned commands
+
+cmfnir:	hllzm d,savflg		;[8] save the flags (left half only)
+cminir:	skiple rscanf		;already done one rscanned command?
+	jrst rscanx		;yes - exit
+	skipe rscanf		;known to be no rescanned data?
+	jrst cmini		;yes - forget this
+	setom rscanf		;now assume no rscanned data
+	movem b,savebc		;save original arguments
+	movem c,savebc+1
+ife tops10,<
+	movei a,0		;see if anything rescanned
+	rscan%
+	 erjrst norscn
+	jumple a,norscn		;nothing - normal cmini
+	movei a,.priin		;set position to start of line to avoid CRLF
+	rfpos%			;get current position
+	hrri b,0		;zero the column number
+	sfpos%
+> ;ife tops10
+ifn tops10,<
+	movei a,0		;see if anything rescanned
+	RESCAN	1		;BACK UP TTY INPUT TO SEE IF COMMAND
+	  SKPINC		;SEE IF ANYTHING THERE
+	    JRST NORSCN		;NO--MUST HAVE COME FROM CUSP LEVEL
+> ;ifn tops10
+;this section of code examines the command that was used to run the
+; program, and bypasses it if appropriate.
+	movei b,0		;now read the rescanned command
+	movei c,0		;with no prompt
+	move a,0(p)		;our return address
+	movem a,iniret		;we will return by jrst @iniret	
+	call cmini
+	movei a,1
+	movem a,erOK
+;command that never has valid data?
+	movei b,igntbl
+	call cmkey
+	move a,2(p)		;result returned by cmkey
+	jumpn a,norscn		;RUN or START - no rescanned command
+;probably file name for running us - bypass it
+	movsi b,40		;file we came from - spec only
+	call gjgen
+	xmovei b,ffcb
+	call cmfil		;scan the file spec
+ifn tops10,<
+	setzm ffcb+filnam	;and release the jfn we got for it
+	setzm ffcb+fildev
+> ;ifn tops10
+ife tops10,<
+	hrrz a,ffcb+filjfn	;and release the jfn we got for it
+	rljfn%
+	 jfcl
+> ;ife tops10
+;now past command - see if anything more for us
+	call cmcfm		;see if anything more
+	skipn erseen		;was there a crlf?
+	jrst norscn		;no error - yes, crlf, no rescanned data
+;there is real data - set up to use it
+	movei a,1		;say have done one rescanned command
+	movem a,rscanf
+	setom errabt		;and make us abort on error
+	setzm erOK		;now go to default error mode
+	move a,iniret		;and get back return addr if this is rescan
+	movem a,0(p)
+	ret			;we have already done cmini
+
+;here second time through when rescanned - exit
+ifn tops10,<
+rscanx:	exit
+> ;ifn tops10
+ife tops10,<
+rscanx:	haltf%
+	setom rscanf		;if continued, leave rscan mode
+	jrst cmini
+> ;ife tops10
+
+;here if no rescanned data - go do normal cmini
+norscn:	move b,savebc		;get back user's arguments
+	move c,savebc+1
+;	jrst cmini
+
+;[3] end
+
+;[8] cmfni('prompt',cmflg);
+;cmini('prompt string');
+
+cmfni:	hllzm d,savflg		;[8] save the flags (left half only)
+cmini:	setzm errabt		;on normal cmini - don't abort for error
+	move t,[point 7,argbuf]	;[9] garbage collect arg buffer/help messages
+	movem t,nxtarg		;[9] point to beginning of buffer
+	move t,[xwd stini,inibeg] ;initialize state variables
+	blt t,iniend
+	skipe d,savflg		;[8] are any flags set?
+	iorm d,state+.cmflg	;[8] yes, set them (left half only)
+	setzm savflg		;[8] clear flags
+	setzm zerbeg	;and zero the ones that should be zero
+	move t,[xwd zerbeg,zerbeg+1]
+	blt t,zerend
+	cail c,prmsiz*5-1	;be sure his prompt isn't too long
+	jrst prmlng
+	xmovei	bix,(b)
+	movx	b,<point 7,(bix)> ;b _ pointer to his prompt
+	move a,[point 7,prmbuf] ;a _ pointer to place to put it
+	jumpe c,cmprm2		;now copy it
+cmprm1:	ildb t,b
+	idpb t,a
+	sojg c,cmprm1
+cmprm2: setz t,			;now put in null
+	idpb t,a
+	move t,0(p)		;save user's return addr for reparse
+	movem t,usrret
+	movem 16,stkret		;save display and stack ptr.
+	movem 17,stkret+1
+cmprm3:	movei a,state		;reinitialize comnd
+	movei b,[flddb.	.cmini]
+ifn simcom,<call comnd>
+ife simcom,<comnd%>
+	ret			;now return after call of cmprompt
+
+reprom: skipn errabt	;[3] abort on error?
+	jrst cmprm3	;[3] no - treat normally
+	jrst endl	;[3] yes - do the abort
+
+	subttl reparse and error handling
+
+
+ife tops10,<
+
+;print the error message
+
+cmerrm:	hrroi a,[asciz / /]
+	esout%		;?
+	movei a,.priou
+	hrloi b,.fhslf
+	setz c,
+ife simcom,<
+	erstr%		;official error msg
+	 jfcl
+	 jfcl
+> ;ife simcom
+ifn simcom,<
+	hrro a,errstr
+	psout%
+> ;ifn simcom
+	hrroi a,[asciz / - /]
+	psout%		; -
+	hrroi a,atbuf	
+	psout%		;erroneous thing
+	hrroi a,[asciz /
+/]	
+	psout%		;crlf
+	ret
+
+;cmuerr prints user error message then calls CMAGAIN
+cmuerr: hrroi a,[0]	;[1] empty asciz string
+	esout%		;[1] empty output buffer, print crlf and ?, clear input
+	movei a,.priou	;[1] where to print message
+	hrli b,(point 7,0);[1]
+	setz d,		;[1] terminate on null or count whichever first
+	sout%		;[1]
+
+>  ;ife tops10
+
+ifn tops10,<
+
+;print the error message
+
+cmerrm:	skpinc
+	jfcl
+	outstr [asciz /
+? /]
+	outstr @errstr
+	outstr [asciz / - /]
+	movei a,40
+	ldb t,[point 7,atbuf,6]
+	caige t,40		;if unprintable,kill it
+	dpb a,[point 7,atbuf,6]
+	outstr atbuf	
+	outstr [asciz /
+/]	
+	ret
+
+;cmuerr prints user error message then calls CMAGAIN
+cmuerr: skpinc
+	jfcl
+	outstr [asciz /
+?/]
+	hrli b,(point 7,0);[1]
+	jumpe c,cmagai
+
+;now stop on count or null
+cmuerl:	ildb a,b
+	jumpe a,cmagai
+	outchr a
+	sojg c,cmuerl
+
+>  ;ifn tops10
+	jrst cmagai	;[1] go to reprompt routine
+
+;parerr is where we go when an argument is not what the user asked for.
+;  print the error message
+;  reprompt and kill the old command line
+;  reparse
+
+parerr:	call cmerrm
+
+;reprompt and kill the old command line
+cmagai:	call reprom	;reprompt him
+;reparse the new command
+	;pjrst repars
+
+;reparse is used to reparse when the user does rubout or something
+;  restore stack and display to context of original CMINI call
+;  reset return location so we go back to the user program right
+;     after the original CMINI call, to redo all parsing
+;  release all jfn's we have gotten
+
+;restore stack and display
+repars:	move a,stkret	;be sure we are called from a legal level
+	xmovei a,(a)	;get rid of LH if not extended
+	xmovei b,(p)
+	camle a,b
+	jrst badstk
+	move 16,stkret	;restore to the way we were at the cmprompt
+	move 17,stkret+1
+;reset return location
+	move t,usrret	;also get the return address back
+	movem t,0(p)	;so we return after call of cmprompt
+
+	setzm mulnxt	;clear from multiple FDB mode
+	setzm fdb+.cmdef ;[1] forget user def and hlp 
+	setzm fdb+.cmhlp ;[1]
+	setzm fdb+.cmbrk ;[5]
+
+;release all jfn's
+	move d,curfil	;now release all jfn's
+repar1:	hrrz d,d	;file stack is local; this simplifies the CAIN
+	cain d,filstk+files ;done releasing?
+	ret		;yes - return to reparse
+	move b,(d)	;b _ current file to release
+ife tops10,<
+	move a,filjfn(b) ;a _ jfn of that file
+	rljfn%		;release the jfn
+	 jfcl		;couldn't - trouble
+> ;ife tops10
+ifn tops10,<
+	setzm filnam(b)	;release the jfn
+	setzm fildev(b)
+> ;ifn tops10
+	aos d,curfil	;go to next file
+	jrst repar1
+
+ifn tops10,<
+prmlng:	outstr [asciz /
+? Prompt is too long
+/]
+	exit
+
+badstk:	outstr [asciz /
+? Reparse requested from block outside CMPROMPT
+/]
+	exit
+> ;ifn tops10
+ife tops10,<
+prmlng:	skipa a,[xwd -1,[asciz /Prompt is too long
+/]]
+badstk:	hrroi a,[asciz /Reparse requested from block outside CMPROMPT
+/]
+fatal:	esout%
+	haltf%
+	jrst .-1
+> ;ife tops10
+
+;[4] cmioj(newofns: integer):integer
+;[4]  sets STATE+.CMIOJ to NEWJFNS and returns old value
+cmioj:	exch b,state+.cmioj	;[4] exchange the old for the new
+	movem b,1(p)		;[4] save old value
+	ret			;[4]
+
+	subttl general purpose routines for doing the COMND jsys
+
+;docom
+;  a - function code
+;  b - contents of .cmdat, if any
+;  d - some data needing to be preserved until after COMND
+;Normally this actually does the COMND.  However if CMMULT has
+;been done, it only sets up an FDB.
+
+docom:	skipe mulnxt	;if in multiple mode
+	jrst setcom	;just set up
+	lsh a,33	;move function code to proper position
+	skipe fdb+.cmhlp ;if user gave help message
+	tlo a,(cm%hpp!cm%sdh) ;then tell comnd to use his and not its
+	skipe fdb+.cmdef ;if user gave default
+	tlo a,(cm%dpp)	;then tell comnd
+	skipe fdb+.cmbrk	;[5] if user gave break mask
+	tlo a,(cm%brk)		;[5] then tell comnd
+	movem a,fdb+.cmfnp
+	movem b,fdb+.cmdat
+	setzm erseen	;assume no errors
+	movei a,state	;now do the COMND
+	movei b,fdb
+ifn simcom,<call comnd>
+ife simcom,<			;[7]
+	comnd%			;[7]
+	erjmp  [movei a,.fhslf	;[7] get my last error
+		geter%		;[7]
+		hrrzs b		;[7] extract the last error
+		skipe eofok	;[7] do we want to handle eof?
+		 caie b,iox4	;[7] yes, is last error eof?
+		  skipa		;[7]
+		jrst eoferr	;[7] yes, handle it
+		movei a,state	;[7] no, redo the COMND jsys to cause the error
+		movei b,fdb	;[7]  for real this time
+		comnd%		;[7] should cause an error again
+		jrst .+1]	;[7] just in case (can't happen)
+> ;[7] ife simcon
+	setzm fdb+.cmdef ;forget user def and hlp from this one
+	setzm fdb+.cmhlp
+	setzm fdb+.cmbrk ;[5]
+	tlnn a,(cm%nop)	;if no errors
+	ret		;then done
+	pop p,(p)	;else return to context of caller
+	setzm 1(p)	;give zero return (if any)
+	aos erseen	;say saw error
+	skipe erOK	;if error OK
+	ret		;return to him
+	jrst parerr	;else give error message and reparse
+
+;
+;Here are the special versions of the above for multiple options
+;
+
+;cmmult
+;  initialize for multiple option command
+cmmult:	movei a,mulfdb	;reset next to point to first space
+	movem a,mulnxt	;non-zero mulnxt is flag that in mult mode
+	setzm fdb+.cmdef
+	setzm fdb+.cmhlp
+	setzm fdb+.cmbrk ;[5]
+	ret
+
+;setcom
+;	This is the first half of DOCOM, for mult mode
+;  a - function code
+;  b - contents of .cmdat, if any
+;  d,e - data for evaluation routine if this FDB is chosen
+
+setcom:	move c,mulnxt	;next position inside MULFDB to use
+	cail c,mulend	;if haven't run out of space
+	 jrst mulser	;out of space
+	movem d,m.loc(c) ;save data for continuation
+	movem e,m.loc+1(c)
+	lsh a,33	;move function code to proper position
+	skipe d,fdb+.cmhlp ;if user gave help message
+	tlo a,(cm%hpp!cm%sdh) ;then tell comnd to use his and not its
+	movem d,.cmhlp(c)  ;and copy current into real FDB
+	setzm fdb+.cmhlp
+	skipe d,fdb+.cmdef ;if user gave default
+	tlo a,(cm%dpp)	;then tell comnd
+	movem d,.cmdef(c)  ;and copy current into real FDB
+	setzm fdb+.cmdef
+	skipe d,fdb+.cmbrk ;[5]if user gave break mask
+	tlo a,(cm%brk)	 ;[5] then tell comnd
+	movem d,.cmbrk(c) ;[5] and copy current into real FDB
+	setzm fdb+.cmbrk ;[5]
+	hrri a,m.size(c) ;pointer to next FDB
+	movem a,.cmfnp(c)
+	movem b,.cmdat(c)
+	pop p,m.disp(c)	;save return addr for later continue
+	addi c,m.size	;advance to next FDB
+	movem c,mulnxt
+	ret		;return to our caller's caller
+
+ifn tops10,<
+mulser:	outstr [asciz /
+? Too many options after CMMULT
+/]
+	exit
+> ;ifn tops10
+ife tops10,<
+mulser:	hrroi a,[asciz /Too many options after CMMULT
+/]
+	jrst fatal
+> ;ife tops10
+
+;<
+
+;cmdo --> which FDB was done
+cmdo:	move c,mulnxt	;clear next pointer of last FDB
+	hllzs -m.size(c)
+	setzm	erseen		;assume no errors
+	xmovei	a,state		;now do the COMND
+	xmovei	b,mulfdb
+ifn simcom,<call comnd>
+ife simcom,<			;[7]
+	comnd%			;[7]
+	erjmp  [movei a,.fhslf	;[7] get my last error
+		geter%		;[7]
+		hrrzs b		;[7] extract the last error
+		skipe eofok	;[7] do we want to handle eof?
+		 caie b,iox4	;[7] yes, is last error eof?
+		  skipa		;[7]
+		jrst eoferr	;[7] yes, handle it
+		xmovei a,state	;[7] no, redo the COMND jsys to cause the error
+		xmovei b,mulfdb	;[7]  for real this time
+		comnd%		;[7] should cause an error again
+		jrst .+1]	;[7] just in case (can't happen)
+> ;[7] ife simcon
+	setzm fdb+.cmdef	;forget user def and hlp from this one
+	setzm fdb+.cmhlp
+	setzm fdb+.cmbrk
+	setzm mulnxt		;and turn off multiple mode
+	tlne a,(cm%nop)		;if errors
+	 jrst mulerr		;process them
+	hrrz d,c		;d = FDB used
+	subi d,mulfdb		;d _ offset into MULFDB
+	idivi d,m.size		;e _ FDB index no.
+	addi d,1		;should be indexed off 1
+	push p,d		;save as final return value
+	tlo	c,-1		;make address local
+	hrro f,m.disp(c)	;a _ dispatch addr
+	move d,m.loc(c)		;d _ data saved at setup
+	move e,m.loc+1(c)
+	call (f)
+	move a,2(p)	;value he tried to return
+	movem a,mulret	;save for later
+	pop p,(p)	;now set up our return value (saved by PUSH above)
+	ret		;and return
+
+;cmint and cmreal just return the saved-away return value
+cmint:
+cmreal:	move a,mulret	;get saved value
+	movem a,1(p)	;and return
+	ret
+
+mulerr:	setzm 1(p)	;give zero return
+	aos erseen	;say saw error
+	skipe erOK	;if error OK
+	ret		;return to him
+	jrst parerr	;else give error message and reparse
+
+;
+;End of special section for multiple alternatives
+;
+
+
+;cmauto(boolean)
+;  if on, we automatically handle errors, else he has to test with cmerr
+
+cmauto:	setz t,		;assume we handle errors
+	cain b,0	;but if he wants to
+	seto t,		;let him
+	movem t,erOK
+	ret		;<
+
+;cmerr --> boolean
+;  true if there has been an error
+
+cmerr:	move t,erseen
+	movem t,1(p)
+	ret
+
+;[7] CMEOF(check_eof: boolean) --> boolean (eof seen)
+;[7] if check_eof is true force a reparse on EOF and return true
+cmeof:	setzm eofok		;[7] assume we handle eof
+	skipe b			;[7] but let him/her if wanted
+	setom eofok		;[7]
+	move a,eofflg		;[7] return whether eof has happened
+	movem a,1(p)		;[7]
+	ret			;[7]
+
+;[7] eoferr - set eof flag and do a reparse for cmeof to handle
+eoferr:	setom eofflg		;[7]
+	jrst cmagai		;[7] do a reparse
+
+	subttl user help and default texts
+
+;cmhlp(string)
+;  append one line to the user help message
+
+cmhlp:	move a,nxtarg	;[10] initial value for curhlp
+	skipn fdb+.cmhlp ;if not set up
+	movem a,curhlp	;do so
+	move a,curhlp	;[11] see if the msg is continguous with last
+	came a,nxtarg	;[11]
+	jrst notctg	;[11] no, err msg and ignore this
+	skipn fdb+.cmhlp ;if this is not the first line
+	jrst cmhlp0
+;here if this is not first line of help msg - add crlf to prev
+	hrrz a,nxtarg	;[11] make sure there is room
+	cail a,argend	;[11] we waste three char's - require a full word
+	jrst argovr	;[11]
+	movei t,15	;then use crlf to separate
+	dpb t,nxtarg	;[11] string was pointing to null
+	movei t,12
+	idpb t,nxtarg	;[11]
+cmhlp0:	call starg	;[11] copy arg to NXTARG. end to A, begin to B
+	movem a,curhlp	;[11] save end for next time
+;now we have to set up word .cmhlp to show there is a help message
+	skipn fdb+.cmhlp ;[11] if not already set
+	movem b,fdb+.cmhlp ;[11] set it to this one
+	ret
+
+
+;cmdef(string)
+;  sets this string as the default for the next call
+
+cmdef:	call starg		;copy into argbuf
+	movem b,fdb+.cmdef	;save in fdb to show there is a default
+	ret
+
+	subttl break mask support
+
+;[6]cmstat:integer;
+;[6] return the address of the comnd state block
+cmstat: movei a,state		;[6]
+	movem a,1(p)		;[6]
+	ret			;[6]
+
+;[5]cmbrk(break_mask)
+;[5]  sets the .CMBRK word (break mask) for the next call
+cmbrk:	movem b,fdb+.cmbrk	;[5]
+	ret			;[5]
+
+;[5]brini(var break_mask; w0,w1,w2,w3: integer);
+;[5] puts W0 through W3 into word 0 through 3 of BREAK_MASK
+brini:	movem c,0(b)	 ;[5]
+	movem d,1(b)	 ;[5]
+	movem e,2(b)	 ;[5]
+	movem f,3(b)	 ;[5]
+	ret		 ;[5]
+
+;[5]brmsk(var break_mask; allow, disallow: string)
+;[5]  sets up a BREAK_MASK
+brmsk:	setz a,		 ;[5] assume we're going to allow some chars
+	skipe d		 ;[5] if ALLOW isn't null
+	call brks	 ;[5] set the bits in that string
+	skipn f		 ;[5] if DISALLOW is null
+	ret		 ;[5] just return
+	seto a,		 ;[5]
+	dmovem e,c	 ;[5] copy DISALLOW string for parameter passing
+	call brks	 ;[5] clear the bits
+	ret		 ;[5]
+
+;[5]brks - set/clear the bit corresponding to the char in string
+;[5] on entry
+;[5]  ac A - 0 = clear bit, 1 = set bit
+;[5]  ac B - base address of word array
+;[5]  ac C - start of string
+;[5]  ac D - length of string
+brks:	push p,e	 ;[5] get registers for the divide
+	push p,f	 ;[5]
+	push p,g	 ;[5] and shift
+	xmovei	bix,(c)
+	movx	c,<point 7,(bix)>
+	setz e,		 ;[5]
+brkec:	sojl d,brkfin	 ;[5] for each char in the string
+	ildb e,c	 ;[5]
+	idivi e,^D32	 ;[5] e = which word, f = which bit in that word
+	add e,b		 ;[5] point to the word
+	movns f		 ;[5] negate (for shift right)
+	hrlzi g,(1b0)	 ;[5] set bit zero
+	lsh g,(f)	 ;[5] shift to bit position
+	iorm g,(e)	 ;[5] always set the bit
+	skipn a		 ;[5] wanted it cleared?
+	andcam g,(e)	 ;[5] yes, then clear the bit
+	jumpa brkec	 ;[5] try for more characters
+brkfin:	pop p,g		 ;[5] restore saved registers
+	pop p,f		 ;[5]
+	pop p,e		 ;[5]
+	ret		 ;[5] return
+	subttl file parsing
+
+;cmifi(file)
+;  parse an input file
+
+cmifi:	movei d,.cmifi
+	jrst cmfile
+
+;cmofi(file)
+;  parse an output file
+
+cmofi:	movei d,.cmofi	
+	jrst cmfile
+
+;cmfil(file)
+;  parse an arbitrary file
+
+cmfil:	movei d,.cmfil
+cmfile: move t,filtst(b)
+	caie t,314157		;if not valid
+	call initz.		;init it
+	call relcl.		;[260] release any old jfn - about to get new
+        move a,d	;a _ function
+	move d,b	;save file in d
+	setz b,		;b _ 0
+	call docom	;will set up data in FCB in D
+ife tops10,<movem b,filjfn(d)> ;return jfn we got
+	sos a,curfil	;save in file stack
+	caige a,filstk	;run out of room?
+	jrst filovr	;yes
+	movem d,(a)	;save file in stack
+	ret
+
+;gjxxx - routines to set up various words in the gtjfn block.
+;  we assume that gjgen is always called first.
+
+fldsiz==^D8		;size of one field in a file name
+
+gjgen:	setzm gjfblk	;clear block first
+	move t,[xwd gjfblk,gjfblk+1]
+	blt gjfblk+.gjatr
+	movem b,gjfblk+.gjgen ;now put in this argument
+	ret
+
+gjdev:	movei d,.gjdev
+	movei e,devblk
+	jrst gjstr
+
+gjdir:	movei d,.gjdir
+	movei e,dirblk
+	jrst gjstr
+
+gjnam:	movei d,.gjnam
+	movei e,namblk
+	jrst gjstr
+
+gjext:	movei d,.gjext
+	movei e,extblk
+	jrst gjstr
+
+gjpro:	movei d,.gjpro
+	movei e,problk
+	jrst gjstr
+
+gjact:	movei d,.gjact
+	movei e,actblk
+	jrst gjstr
+
+gjjfn:	movem b,gjfblk+.gjjfn
+	ret
+
+gjstr:	;b - addr of string
+	;c - length of string
+	;d - offset in gjfblk
+	;e - place to copy string
+
+	cail c,fldsiz*5	;be sure string is small enough
+	 jrst argovr	;is too long
+	xmovei	bix,(b)		;b _ source
+	movx	b,<point 7,(bix)>
+	hrli e,(point 7,0)	;e _ destination
+	movem e,gjfblk(d) ;save pointer to it in gtjfn block
+	jumpe c,gjstr2	;now copy
+gjstr1:	ildb t,b
+	idpb t,e
+	sojg c,gjstr1
+gjstr2: setz t,		;null
+	idpb t,e
+	ret
+
+	reloc
+
+devblk:	block fldsiz
+dirblk:	block fldsiz
+namblk:	block fldsiz
+extblk:	block fldsiz
+problk:	block fldsiz
+actblk:	block fldsiz
+
+	reloc
+
+filovr:	hrroi a,[asciz /Too many jfn's
+/]
+ife tops10,<
+nonfat:	esout%
+>
+ifn tops10,<
+nonfat:	skpinc
+	jfcl
+	outstr [asciz /
+? /]
+	outstr (a)
+> ;ifn tops10
+	jrst cmagai
+	subttl TBMAK, TBADD, and CMKEY - keyword stuff
+
+;tbmak(size) --> pointer to table
+;  generates table with specified number of entries, returns pointer to
+;	it.  the table is in the heap
+
+tbmak:	push p,b	;save size for later
+	addi b,1	;need extra word for header
+	call inew	;b _ addr of header
+	pop p,a		;a _ size
+	movem a,(b)	;0,,size is header word
+	movem b,1(p)	;return addr of header
+	ret
+
+;tbadd(table pointer, value, string, bits)
+;  adds an entry to the table
+
+tbadd:	push p,b	;table pointer
+	push p,c	;value
+	push p,d	;string addr
+	push p,e	;string length
+	push p,f	;bits
+	idivi e,5	;  convert to words
+	addi e,1	; (added 1 for null)
+	movei b,1(e)	;add one for the header
+	call inew	;b _ addr of argument block
+	pop p,t		;t _ bits
+	tlo t,(cm%fw)	;  bit that says first word is bits
+	movem t,(b)	;put t in header
+	pop p,a		;a _ # characters
+	pop p,bix		;bix _ source address
+	movx	c,<point 7,(bix)>
+	movx	d,<point 7,1(b)> ;d _ destination byte pointer (in arg block)
+	jumpe a,tbadd2		;now copy a characters
+tbadd1:	ildb t,c
+	idpb t,d
+	sojg a,tbadd1
+tbadd2:	setz t,		;add a null
+	idpb t,d
+	pop p,a		;a _ value
+	hrl a,b		;a _ arg addr,,value
+	pop p,b		;b _ table addr
+	exch a,b	;jsys wants a and b reversed
+ife simcom,<
+ifn klcpu,<
+	hlrz	c,a		;get section # of table address
+	came	c,sn.cod
+	 jrst	[errmsg	<NON-LOCAL address in call to TBADD>
+		jrst	endl]
+	tlz	a,-1		;tbadd dies with global addresses
+>;ifn klcpu
+	tbadd%
+s1.ret:	ret
+> ;ife simcom
+ifn simcom,<
+;tbadd simulation
+;  a - addr of header
+;  b - arg addr,,value
+;  c - current number of entries
+;  d - offset into table we are looking at now
+	hlrz c,(a)	;c _ max offset existing
+	hrrz e,(a)	;see if too big for table
+	caige e,1(c)
+	jrst tbaddb	;too big
+	movs e,b	;e _ byte ptr to string to compare
+	hrli e,000700			
+	movei d,1	;d _ current offset
+tbaddl:	camle d,c	;if new offset .GT. end
+	jrst tbaddn	;then add to end
+	call tbaddc	;now compare new with table
+	jumpl t,tbaddh	;less - add here
+	jumpe t,tbaddo	;same - old elt
+	aoja d,tbaddl
+
+;here to add elt at offset d
+tbaddh:	addi c,1	;table now 1 bigger
+	hrlm c,(a)	;so update count field
+	add d,a		;d _ addr of last elt to move
+	add a,c		;a _ addr of new end elt
+tbadhl:	move t,-1(a)	;now shift things
+	movem t,(a)
+	cail d,-1(a)	;if last to move still not moved
+	jrst tbadhx	;it has
+	soja a,tbadhl	;no, then do next
+tbadhx:	movem b,(d)	;now have place for new data
+	ret
+
+;here to add to end
+tbaddn:	addi c,1	;table now 1 bigger
+	hrlm c,(a)	;so update count field in table
+	add a,c		;compute addr of new elt
+	movem b,(a)	;put it there
+	ret
+
+ifn tops10,<
+tbaddo:	outstr [asciz /
+? New elt. was already there - TBADD
+/]
+	exit
+
+tbaddb:	outstr [asciz /
+? Table too small - TBADD
+/]
+	exit
+> ;ifn tops10
+ife tops10,<
+tbaddo:	hrroi a,[asciz /New elt. was already there - TBADD/]
+	jrst fatal
+
+tbaddb:	hrroi a,[asciz /Table too small - TBADD/]
+	jrst fatal
+> ;ife tops10
+
+;tbaddc - compare string with table entry
+;  a - addr of table header
+;  e - byte pointer to string to compare
+;  d - offset into table
+;  returns in t - +1, 0, -1 if string gt, eq, lt
+tbaddc:	move f,h	;f _ compare byte ptr
+	move g,a	;g _ table byte ptr
+	add g,d
+	movs g,(g)
+	hrli g,000700
+tbadcl:	ildb t,f	;get comp byte
+	cail t,141	;make upper case
+	caile t,172
+	jrst .+2
+	subi t,40
+	ildb h,g	;get table byte
+	cail h,141	;make upper case
+	caile h,172
+	jrst .+2
+	subi t,40
+	came t,h	;now compare
+	jrst tbadcx	;found difference - stop
+	jumpn t,tbadcl	;same, if non-null, go back for more
+	ret		;same - complete match	
+tbadcx:	caml t,h
+	jrst tbadcg	;greater
+	seto t,		;less
+	ret
+tbadcg:	movei t,1	;greater
+	ret
+> ;ifn simcom
+
+;<
+;cmkey(table) --> value
+;  parse a keyword - return the value from the table for it    <
+;cmswi(table) --> value
+;  parse a switch - return the value from the table for it
+
+cmswi:	skipa a,[exp .cmswi]
+cmkey:	movei a,.cmkey	;b already has contents of .cmdat
+	call docom	;b _ addr of table entry found
+	hrrz t,(b)	;get value from table entry
+	tlne a,(cm%swt)	;if switch ended in colon
+	movn t,t	;then negate the value
+	movem t,1(p)	;return it
+	ret
+
+	subttl CMCFM, CMNUM, CMNUM8, CMNUX, CMNUX8, CMNOI
+
+;cmcfm
+;  wait for CR
+;cmcma
+;  look for comma
+
+cmcma:	skipa a,[exp .cmcma]
+cmcfm:	movei a,.cmcfm
+	setz b,
+	call docom
+	ret
+
+;cmnum
+;  number, base 10
+;cmnum8
+;  number, base 8
+
+cmnum8:	skipa b,[exp ^D8]
+cmnum:	movei b,^D10
+	movei a,.cmnum
+	call docom
+	movem b,1(p)
+	ret
+
+;cmnux
+;  number, base 10, term on first non-numeric
+;cmnux8
+;  number, base 8, term on first non-numeric
+
+cmnux8:	skipa b,[exp ^D8]
+cmnux:	movei b,^D10
+	movei a,.cmnux
+	call docom
+	movem b,1(p)
+	ret
+	subttl functions that take string arguments
+
+starg:	move t,c	;[9] get size of string
+	idivi t,5	;[9] convert to chars words
+	hrrz a,nxtarg	;[9] right half of byte ptr
+	addi t,1(a)	;[9]
+	caile t,argend	;[9]
+	jrst argovr	;is too long
+	xmovei bix,(b)
+	movx b,<point 7,(bix)> ;b _ source
+	move a,nxtarg	;[9] a _ destination
+	jumpe c,starg2	;now copy
+starg1:	ildb t,b
+	jumpe t,starg2	;stop on null
+	idpb t,a
+	sojg c,starg1
+starg2: setz t,		;null
+	idpb t,a
+	move b,nxtarg	;[9] b _ pointer to argument
+	movem a,nxtarg	;[9] update point to next free byte
+	ret
+
+ife tops10,<
+argovr:	hrroi a,[asciz /Argument too large for buffer
+/]
+	jrst fatal
+
+notctg:	hrroi a,[asciz /You must not call any PASCMD functions with string arguments
+between successive calls to CMHLP - ignoring call to CMHLP
+/]
+	esout%
+	ret
+> ;ife tops10
+ifn tops10,<
+argovr:	outstr [asciz /
+? Argument too large for buffer
+/]
+	exit
+notctg:	outstr [asciz /
+You must not call any PASCMD functions with string arguments
+between successive calls to CMHLP - ignoring call to CMHLP
+/]
+	ret
+> ;ifn tops10
+
+;cmnoi(string)
+;  noise words
+
+cmnoi:	call starg	;puts string into argument area
+	movei a,.cmnoi
+	call docom
+	ret
+
+;[11] cmctok(char)
+;cmtok(string)
+;  match specified thing
+
+cmctok:	dpb b,[<point 7,d,6>]	;[11] make the char into a string
+	movei c,1		;[11] of size 1
+	movei b,d		;[11] point to it
+				;[11] do a cmtok now
+cmtok:	call starg
+	movei a,.cmtok
+	call docom
+	ret
+	subttl functions that return the atom buffer
+
+;cmatom(var string):count;
+;  copies the atom buffer into the string
+
+cmtext:	skipa d,[point 7,txtbuf] ;[12] d _ source (text buffer)
+cmatom:	move d,[point 7,atbuf]	;[12]d _ source (atom buffer)
+	movei a,0		;a _ count
+	xmovei	bix,(b)
+	movx	b,<point 7,(bix)> ;b _ destination
+				;c _ size of destination
+	jumpe c,atmovr		;now copy until null or space runs out
+cmatm1:	ildb t,d
+	jumpe t,cmatm2
+        sojl c,atmovr   ;[2] if no more room to copy, post message
+	idpb t,b	;[2]
+	aoja a,cmatm1	;[2]
+cmatm2:	jumpe c,cmatm4	;clear rest of destination to blanks
+	movei t,40	;clear rest of destination to blanks
+cmatm3:	idpb t,b
+	sojg c,cmatm3
+cmatm4:	movem a,1(p)	;return count of char's copied
+	ret
+
+atmovr:	hrroi a,[asciz /Field too big
+/]
+	jrst nonfat
+
+;cmfld(var string):count
+;  scan arbitrary field
+;cmtxt(var string):count
+;  scan rest of line as one field
+
+cmtxt:	skipa a,[exp .cmtxt]
+cmfld:	movei a,.cmfld
+cmfl:	move d,b
+	move e,c
+	setz b,
+	call docom
+	move b,d
+	move c,e
+	jrst cmatom	;return the data and count
+
+;[12]cmuqs(var string; breakmask; var breakchar):count
+;[12]  unquoted string
+
+cmuqs:	movei a,.cmuqs		;[12]
+;[12] B/ addr(string), C/ length(string), D/ addr(breakmask) E/ addr(breakchar)
+	exch d,b		;[12].CMDAT <- addr(break mask)
+	move f,c		;[12]save length(string)
+	move g,e		;[12]and addr(breakchar)
+	call docom		;[12]do the COMND (or set up FDB)
+	move b,state+.cmptr	;[12]get pointer to break char
+	ildb b,b		;[12]get break character
+	movem b,(g)		;[12]return it
+	move b,d		;[12]restore the addr(string)
+	move c,f		;[12]and its length
+	jrst cmtext		;[12]return the data and count
+
+
+;cmqst(var string):count
+;  quoted string (quotes not returned)
+
+cmqst:	movei a,.cmqst
+	jrst cmfl
+
+;cmact(var string):count
+;  account string
+
+cmact:	movei a,.cmact
+	jrst cmfl
+
+;cmnod(var string):count
+;  node name
+
+cmnod:	movei a,.cmnod
+	jrst cmfl
+	subttl routines that just return a scalar
+
+;cmdir:integer
+;  get directory number
+;cmdirw:integer
+;  allow wildcard
+
+cmdirw:	skipa b,[exp cm%dwc]
+cmdir:	setz b,
+	movei a,.cmdir
+	call docom
+	movem b,1(p)
+	ret
+
+;cmusr:integer
+;  get user number
+;cmflt:real
+;  get floating point number
+
+cmflt:	skipa a,[exp .cmflt]
+cmusr:	movei a,.cmusr
+cmx:	setz b,
+	call docom
+	movem b,1(p)
+	ret
+
+;cmdev:integer
+;  get device designator
+
+cmdev:	movei a,.cmdev
+	jrst cmx
+
+	subttl time and day stuff
+
+;cmtad:integer
+;  time and date in internal format
+;cmd:integer
+;  date in internal format
+
+cmd:	skipa b,[exp cm%ida]
+cmtad:	movsi b,(cm%ida!cm%itm)
+cmtadx:	movei a,.cmtad
+	call docom
+	movem b,1(p)
+	ret
+
+;cmt:integer
+;  time in internal format
+
+cmt:	movsi b,(cm%itm)
+	jrst cmtadx
+
+;cmtadn(var tadrec);
+;  time and date not converted
+
+cmtadn:	hrli b,(cm%ida!cm%itm!cm%nci)
+cmtnx:	movei a,.cmtad
+	call docom
+	ret
+
+;cmdn(var tadrec);
+;  date not converted
+
+cmdn:	hrli b,(cm%ida!cm%nci)
+	jrst cmtnx
+
+;cmtn(var tadrec);
+;  time not converted
+
+cmtn:	hrli b,(cm%itm!cm%nci)
+	jrst cmtnx
+
+ifn simcom,<
+ subttl COMND jsys
+
+;AC usage:
+
+;a - state block
+;b - 1st ftn block, will be used for return
+;c - LH = orig ftn block, RH = cur ftn block
+;d - data from caller (FCB in case of files)
+;e - bptr to current input char
+;f - # chars left in input
+
+comnd:	push p,e	;don't touch e
+	hrl c,b		;once-only inits - cur ftn to first
+	hrr c,b
+	move t,.cmflg(a)
+	hrrzs .cmflg(a)	;clear flags
+	movsi g,(cm%pfe);set prev field esc
+	tlne t,(cm%esc)	;if esc was on
+	iorm g,.cmflg(a)
+;main loop - here once for each function
+cmlop:	trnn c,777777	;any function to do?
+	jrst retnop	;no - return with CM%NOP
+	move e,.cmptr(a);restore input scanner
+	move f,.cminc(a)
+	ldb g,[point 9,(c),8] ;ftn code
+	caile g,maxftn	;see if valid
+	 jrst illftn
+	call @ftntab(g)	;returns value in B, skip if fails, sets flags
+	 jrst gotit
+	 jrst ftnfai
+	 jrst ftnhlp
+	 jrst nulhlp
+	 jrst killin
+
+ftnfai:	hrr c,(c)		;failed, go to next ftn
+	jrst cmlop
+
+ftnhlp:	hrr c,(c)		;help - if there is another function
+	trnn c,777777
+	jrst hlpend
+	outstr [asciz /  or/]	;then say OR and go do it
+	jrst cmlop
+
+;nulhlp - for function which don't output a help message - no "OR"
+nulhlp:	hrr c,(c)
+	trnn c,777777
+	jrst hlpend
+	jrst cmlop
+
+hlpend:	move t,e		;clear the ?
+	setz g,
+	idpb g,t		;to null
+  ;now put out prompt if any
+	skipn g,.cmrty(a)
+	jrst hlpret
+hlprom:	ildb h,g
+	jumpe h,hlpret
+	outchr h
+	jrst hlprom
+  ;now retype the line and go try again
+hlpret:	move g,.cmbfp(a)	;start of buffer
+hlprtl:	ildb h,g
+	jumpe h,hlpxit
+	outchr h
+	jrst hlprtl
+hlpxit:	hlr c,c			;restart with first function
+	jrst cmlop
+
+gotit:	movem e,.cmptr(a)	;save state in state block
+	movem f,.cminc(a)
+	hll a,.cmflg(a)		;return flags to user
+	pop p,e
+	ret
+
+retnop:	movsi t,(cm%nop)	;set no-parse bit
+	iorm t,.cmflg(a)
+	hll a,.cmflg(a)
+	pop p,e
+	ret
+
+;killin - respond to bell - clear line and reprompt
+killin:	outstr [asciz / XXX
+/]
+	call doini
+	movem e,.cmptr(a)
+	movem f,.cminc(a)
+	hrrz g,.cmflg(a)	;see if he supplied a reparse addr
+	jumpn g,kilrep		;yes, use it
+	movsi t,(cm%rpt)	;no - set need reparse
+	iorm t,.cmflg(a)
+	hll a,.cmflg(a)
+	pop p,e
+	ret
+
+kilrep:	pop p,e
+	pop p,(p)		;go to reparse
+	jrst (g)
+
+illftn:	movei t,[asciz /Unimplemented function code in call to COMND/]
+	movem t,errstr
+	jrst retnop
+
+doini:	hlrz t,.cmrty(a)	;normalize pointers
+	cain t,777777
+	movei t,(point 7,0)
+	hrlm t,.cmrty(a)
+	hlrz t,.cmbfp(a)
+	cain t,777777
+	movei t,(point 7,0)
+	hrlm t,.cmbfp(a)
+	hlrz t,.cmabp(a)
+	cain t,777777
+	movei t,(point 7,0)
+	hrlm t,.cmabp(a)
+	skipn g,.cmrty(a)	;put out prompt
+	jrst noprom
+proml:	ildb h,g
+	jumpe h,noprom
+	outchr h
+	jrst proml
+
+noprom:	setz f,			;f (.cminc)  nothing here now
+	move e,.cmbfp(a)	;e (.cmptr)  start of text is start of buf
+	setz t,			;clear first char as sign of empty buf
+	idpb t,e
+	move e,.cmbfp(a)	;get e back again
+	hrrzs .cmflg(a)		;clear flags
+	ret
+
+	subttl COMND function table
+
+;To work with this, a function must obey the following:
+
+;preserves A, C, D
+;updates E and F if it reads char's
+;returns value in B, if any (else preserves it)
+;skips if it fails
+;sets any appropriate flags in in .CMFLG
+
+maxftn==23
+
+ftntab:	exp dokey	;0
+	exp donum	;1
+	exp donoi	;2
+	exp doswi	;3
+	exp doifi	;4
+	exp doofi	;5
+	exp dofil	;6
+	exp dofld	;7
+	exp docfm	;10
+	exp dodir	;11
+	exp dousr	;12
+	exp docma	;13
+	exp doini	;14
+	exp dounim	;15
+	exp dounim	;16
+	exp dounim	;17
+	exp dounim	;20
+	exp dounim	;21
+	exp dounim	;22
+	exp dotok	;23
+
+
+dounim:	movei t,[asciz /Unimplemented function code in call to COMND/]
+	movem t,errstr
+	aos (p)
+	ret
+
+;The normal prolog for a function is as follows:
+;  call getskp	;or getatm if you don't want to skip blanks
+;  jrst givhelp
+;  call copyxxx  	;routine to copy atom into atom buffer
+
+;The routine should return
+;  nonskip if it parsed the thing requested
+;  skip 1 if it didn't
+;  skip 2 if it did help
+
+;The help routine normally starts with
+;  call chkhlp
+
+;CHKHLP checks for user help, and outputs it, aborting the caller, and
+;  	returning +2
+;  If no user help, it sets up its caller to return +2, and returns to
+;	its caller
+
+;Getskp does the following:
+;  clear atom buffer
+;  skip blanks
+;  if null, read a line from the terminal and go skip blanks again
+;  if ^G, abort caller and make him return +4
+;  if ?, non-skip ret
+;  if lf, copy default to atom buffer and skip 2
+;	   if no default, skip 1 (user will copy LF to buffer)
+;  if esc, copy default to atom buffer, output, and line buffer and skip 2
+;	   if no default, wipe out the esc, beep, and treat as a null ending
+;  else skip 1
+
+getskp:	move g,.cmabp(a)	;clear atom buffer
+	setz t,
+	idpb t,g		;null in first char is enough
+;skip blanks
+doskip:	move t,e		;peek
+	ildb t,t
+	cain t,11		;tab is like blank
+	movei t,40
+	caie t,40		;if not blank
+	jrst endskp
+	subi f,1		;it is, gobble it
+	ildb t,e
+	jrst doskip		;and try again	
+;if null, read a line from the terminal
+endskp:	jumpn t,chkbel		;if not a null, go on
+ifn tops10,<
+getmor:	move g,.cmcnt(a)	;g _ last legal position in buffer
+	adjbp7 g,.cmbfp(a)	;normalize
+	tlnn g,400000		;if 440700
+	jrst endskx		;not
+	tlc g,450000		;change to 010700
+	subi g,1		;in previous word
+endskx:	move h,e		;h _ place to put new char's
+readl:	inchwl t		;get a char
+	idpb t,h		;put it down
+	camn h,g		;see if at end of buffer
+	jrst cmtool		;yes - line too long
+	addi f,1		;now have one more char
+	aos .cminc(a)
+	cain t,15		;cr is special
+	jrst [	inchwl t
+		dpb t,h		;put down lf
+		jrst readx]
+	caie t,33
+	cain t,12
+	jrst readx		;stop on term's
+	jrst readl
+
+readx:	move i,h		;look at prev char
+	subi i,1
+repeat 4,<ibp i>
+	ldb t,i
+	cain t,"-"		;if -, this is continuation
+	jrst readcn
+	setz t,			;make asciz
+	idpb t,h
+> ;ifn tops10
+ife tops10,<printx Code for read line not yet written>
+	jrst doskip		;now go skip blanks in new line
+
+readcn:	subi i,1		;now backup over - and lf
+repeat 4,<ibp i>
+	move h,i
+	subi f,2
+	sos .cminc(a)
+	sos .cminc(a)
+	jrst readl
+
+chkbel:	caie t,7
+	jrst chkqes		;if not bel, go on
+	pop p,(p)		;abort caller
+	movei t,4		;make him return +4
+	addm t,(p)
+	ret
+
+;  if ?, non-skip ret
+chkqes:	caie t,"?"		;do we have question mark
+	jrst chklf		;no - go on
+	ret			;yes - return without advancing anything
+
+;  if lf, copy default to atom buffer and skip 2
+;	   if no default, skip 1 (user will copy LF to buffer)
+chklf:	caie t,12		;do we have a line feed?
+	jrst chkesc		;no - go on
+	move t,.cmfnp(c)	;get function flags
+	aos (p)			;will skip at least once
+	tlnn t,(cm%dpp)		;is there a default?
+	ret			;no, skip 1
+	call copydf		;copy default to atom buffer
+	aos (p)			;skip 2
+	ret
+
+copydf:	hlrz g,.cmdef(c)	;g - source of copy
+	cain g,-1		; normalize bpt
+	movei g,(point 7,0)
+	hrl g,g
+	hrr g,.cmdef(c)
+	move h,.cmabp(a)	;h - dest of copy
+	move i,.cmabc(a)	;i - size of dest
+cpydfl:	jumpe i,dftool		;copy loop
+	ildb t,g
+	jumpe t,cpydfx		;done at null
+	idpb t,h
+	soja i,cpydfl
+cpydfx:	setz t,			;make asciz
+	idpb t,h
+	ret
+
+;  if esc, copy default to atom buffer, output, and line buffer and skip 2
+;	   if no default, ignore it and read more.
+chkesc:	caie t,33		;do we have an esc?
+	jrst chknor		;no - go on
+	move t,.cmfnp(c)	;get function flags
+	tlnn t,(cm%dpp)		;is there a default?
+	jrst nodflt		;no default - read more
+	movsi t,(cm%esc)	;say we say esc, for noise
+	iorm t,.cmflg(a)
+	call copydf		;copy default to atom buffer
+  ;copy default to text buffer and output
+	hlrz g,.cmdef(c)	;g - source of copy
+	cain g,-1		; normalize bpt
+	movei g,(point 7,0)
+	hrl g,g
+	hrr g,.cmdef(c)
+	move i,.cmcnt(a)	;i _ last legal position in buffer
+	adjbp7 i,.cmbfp(a)	;normalize
+	tlnn i,400000		;if 440700
+	jrst chkes1		;not
+	tlc i,450000		;change to 010700
+	subi i,1		;in previous word
+chkes1:	outchr [exp 10]
+   ;note that this loop uses e - that is, it appends to the buffer and
+   ;also advances the current pointer.  This is because we are going
+   ;to do a skip return, having copied into the atom buffer already.
+   ;this is also why we don't incr F, since these characters aren't
+   ;available for future reading in this pass (though they are in the
+   ;buffer, so .CMINC is incr'ed)
+appdfl:	ildb t,g		;append to buffer
+	jumpe t,appdfx
+	idpb t,e
+	outchr t
+	camn e,i		;if went too far
+	jrst cmtool		;complain
+	aos .cminc(a)		;now have one more char
+	jrst appdfl
+appdfx:	setz t,			;make asciz
+	move h,e
+	idpb t,h
+  ;skip 2
+	aos (p)
+	aos (p)
+	ret
+
+;here if no default.  Ignore the esc and read more, except that
+;if it is .CMFIL and there is a default device or name, allow it,
+;because GTJFN will supply the default.
+nodflt:	ldb g,[point 9,(c),8] 	;ftn code
+	caie g,.cmfil		;if a file, with long form GTJFN
+	jrst nodfln
+	move g,.cmgjb(a)	;look at defaults
+	skipn .gjdev(g)		;if device
+	skipe .gjnam(g)		;or name
+	jrst cpopj1		;then there are defaults, user will get them
+;here to go read more
+nodfln:	outchr [exp 10]
+	jrst getmor
+
+;  else skip 1
+chknor:	aos (p)
+	ret
+
+ifn tops10,<
+dftool:	outstr [asciz /
+? Default too long for internal working space
+/]
+	exit
+cmtool:	outstr [asciz /
+? Input line too long for buffer
+/]
+	exit
+> ;ifn tops10
+ife tops10,<
+dftool:	hrroi a,[asciz /Default too long for internal working space/]
+	jrst fatal
+cmtool:	hrroi a,[asciz /Input line too long for buffer/]
+	jrst fatal
+> ;ife tops10
+
+;chkhlp - do user help if any - sets up +2 return
+chkhlp: aos -1(p)		;caller will return +2
+	aos -1(p)
+	move g,.cmfnp(c)	;get ftn flags
+	tlnn g,(cm%hpp)		;user help?
+	ret			;no - user default
+	outchr [exp " "]	;yes - get his
+	move g,.cmhlp(c)
+	hlrz h,g		;normalize it
+	cain h,777777
+	movei h,(point 7,0)
+	hrl g,h
+chkhll:	ildb t,g		;now output it
+	jumpe t,chkhlx
+	outchr t
+	jrst chkhll
+chkhlx:	outstr [asciz /
+/]
+	pop p,(p)		;abort caller, since we have done his job
+	ret
+
+	subttl File scanning functions
+
+ifn tops10,<
+doofi:	skipa h,[exp gj%fou]	;output file
+doifi:	movsi h,(gj%old)	;input file
+	move g,.cmgjb(a)  ;clear all the fields we are currently using
+	movem h,.gjgen(g)
+	setzm .gjdev(g)
+	setzm .gjnam(g)
+	setzm .gjext(g)
+dofil:	setz g,		;g is flag as to whether COPYFI is done
+;the problem here is that COPYFI doesn't know when a file spec
+;is done.  thus it copies as much as it can.  The parser then
+;tells it how many char's were actually part of the spec.  At
+;that point e and f are updated.
+	call getskp
+	jrst hlpfil
+	call copyfi
+	push p,a
+	push p,b
+	push p,c
+	push p,d
+	push p,e
+	push p,f
+	push p,g
+	push p,t	;will be garbaged
+	move b,d
+	hrrz c,.cmabp(a)
+	move d,.cmabc(a)
+	move e,.cmgjb(a)
+	call cmpars
+	move h,2(p)
+	pop p,t
+	pop p,g
+	pop p,f
+	pop p,e
+	pop p,d
+	pop p,c
+	pop p,b
+	pop p,a
+;h is number of char's read.  Adjust various counts as if we had
+;read them one at a time
+	caml h,.cmabc(a);if read to the end of at buf
+	jrst dofits	;then at buf was too small
+  ;the atom buffer is used for two things - in case there was
+  ;an error, it is dumped by the error msg.  In case of
+  ;recognition, PARSE appends the added portions.  Note that the
+  ;value returned in H includes only what was there orginally,
+  ;not the parts added by recognition.
+  ;  Normally COPYxx will adjust E and F as it copies from
+  ;the buffer into the atom buffer.  But with a file, only
+  ;PARSE knows the syntax well enough to be sure when the
+  ;string is empty.  So COPFIL just fills the atom buffer.
+  ;PARSE then tells us how many of these characters were really
+  ;part of the file name.  Here we adjust E and F to show that
+  ;only those characters were copied.  G tells us whether we
+  ;have to do this.  if the file name was defaulted, then
+  ;we didn't get it from the text buffer, so there is nothinng
+  ;to skip.  Note that PARSE makes the atom buffer ASCIZ.
+  ;It puts the null at the end of the full file spec, including
+  ;anything it added due to recognition.
+	jumpe g,filrec	;if copied from input
+	move i,h	;adjust E and F to skip right num of char's
+	adjbp7 i,e
+	movem i,e
+	sub f,h
+;here to do recognition on file names (if any).  What we do is check
+;to see if there are any characters in the atom buffer beyond the
+;number returned in H.
+filrec:	move i,h		;adjust to end of original str. in atom buf
+	adjbp7 i,.cmabp(a)
+	move t,i
+	ildb t,t
+	jumpe t,filnrc		;nothing more - no completion
+	movsi g,(cm%esc)	;say we did completion (for noise)
+	iorm g,.cmflg(a)
+	outchr [exp 10]		;back over esc
+	move g,.cmcnt(a)	;g _ last legal position in buffer
+	adjbp7 g,.cmbfp(a)	;normalize
+	tlnn g,400000		;if 440700
+	jrst endskx		;not
+	tlc g,450000		;change to 010700
+	subi g,1		;in previous word
+				;i - source (set up above)
+  ;start of copy loop
+filrcl:	ildb h,i
+	jumpe h,filrcx
+	idpb h,e		;now copy to text
+	outchr h		;and terminal
+	camn e,g		;see if at end of buffer
+	jrst cmtool		;yes - line too long
+	aos .cminc(a)		;one more thing in buf
+	jrst filrcl		;now loop for more
+ ;end of loop - make asciz
+filrcx:	move t,e		;use copy of bpt since this is one ahead
+	idpb h,t
+	camn t,g		;see if this went too far
+	jrst cmtool
+;recognition finished.  Check for errors
+filnrc:	skipn fileof(d)	;if error
+	ret
+	movei t,[asciz /invalid syntax in file specification/]
+	movem t,errstr
+	aos (p)
+	ret
+
+dofits:	movei t,[asciz /file specification too long for internal working space/]
+	movem t,errstr
+	aos (p)
+	ret
+
+hlpfil:	call chkhlp		;see if use gave help msg
+	move g,.cmgjb(a)	;look at flags
+	move g,.gjgen(g)
+	movei h,[asciz / output filespec
+/]				;assume input
+	tlnn g,(gj%old)		;but if OLD is on
+	tlnn g,(gj%fou)		;or NEW is off
+	movei h,[asciz / input filespec
+/]				;then it is input
+	outstr (h)
+	ret
+
+copyfi:	move g,.cmabp(a)	;g _ ptr to at buf
+	move h,.cmabc(a)	;h _ cntr to at buf
+	move i,e		;i _ ptr to input
+	move j,f		;j _ cntr to input
+copyfl:	jumpe h,copyfx		;test for done
+	jumpe j,copyfx
+	soj h,
+	soj j,
+	ildb t,i		;copy char
+	idpb t,g
+	jrst copyfl
+copyfx:	ret
+
+> ;ifn tops10
+ife tops10,<printx Code for file scanning not yet written>
+
+	subttl Switches and keywords
+
+doswi:	call getskp
+	jrst hlpswi
+	call copysw
+	 skipa
+	 jrst cpopj1
+	move g,.cmabp(a)
+	ildb t,g		;get slash (we hope)
+	caie t,"/"
+	jrst dosnsw		;no - not a switch
+	push p,g		;pass pointer to keywd part
+	call dokey1		;now treat as keyword
+	 skipa
+         jrst [	pop p,g
+		jrst cpopj1]	
+	pop p,g			;adj stack
+	move k,.cmabc(a)	;count of space in atom buf
+	subi k,1		;already beyond /
+	call swcomp		;completion if appropriate
+	 skipa
+	 jrst cpopj1
+	move g,.cmabp(a)	;now see if atom buffer ended in colon
+doswl:	ildb t,g
+	caie t,0
+	cain t,":"		;see if term with colon
+	jrst .+2
+	jrst doswl
+	caie t,":"
+	ret			;no - nothing special
+	movsi t,(cm%swt)	;say found a colon
+	iorm t,.cmflg(a)
+	ret
+
+dokey:	call getskp
+	jrst hlpkey
+	call copykw
+	 skipa
+	 jrst cpopj1
+	move g,.cmabp(a)
+	push p,g
+	call dokey1
+	 skipa
+         jrst [	pop p,g
+		jrst cpopj1]
+	pop p,g
+	move k,.cmabc(a)	;space in at buf
+	call swcomp
+	 ret
+	 jrst cpopj1
+
+dokey1:	move t,-1(p)		;make sure we have something
+	ildb t,t
+	caie t,0
+	cain t,":"
+	jrst dosnul
+;  g - aobjn pointer into table
+;  h - 0 if no match so far, else value (addr in table) of match
+	move g,.cmdat(c)	;g _ aobjn pointer into table - this is table
+	hlrz h,(g)		;    this is number of entries
+	movn h,h		;    negative
+	hrl g,h			;   in LH of G
+	addi g,1		;   now have our AOBJN
+	setz h,
+	jumpge g,dosnom		;if table is empty, no match
+doswil:	move i,-1(p)		;look up thing in at buf
+	call lookc
+	jumpg t,doswie		;exact match
+	jumpl t,doswia		;abbrev
+doswii:	aobjn g,doswil		;try again
+;here if we fall out of the loop
+	jumpe h,dosnom		;if no possibilities, no match
+	move g,h		;exactly one, do it
+	;jrst doswie		;same as exact
+;here for exact match
+doswie:	hrrz b,g		;return addr of table entry
+	ret
+
+doswia:	jumpn h,dosamb		;already have one possibility - ambig
+	move h,g		;save this as first poss
+	jrst doswii		;now try again
+
+;lookc - compare string with table entry
+;  g - addr of table entry
+;  i - byte pointer to string to compare (can be changed)
+;  returns in t -   -1=abbr, +1=exact, 0=none
+
+lookc:	movs j,(g)	;j - bpt to string in table
+	hrli j,000700
+lookcl:	ildb t,i	;get comp byte
+	cail t,141	;make upper case
+	caile t,172
+	jrst .+2
+	subi t,40
+	ildb k,j	;get table byte
+	cail k,141	;make upper case
+	caile k,172
+	jrst .+2
+	subi k,40
+	came t,k	;now compare
+	jrst lookcx	;found difference - stop
+	jumpn t,lookcl	;same, if non-null, go back for more
+	movei t,1
+	ret		;same - complete match	
+lookcx:	caie t,0
+	cain t,":"
+	jrst lookca	;comp ran out - abbrev
+	setz t,		;just plain failure - say so
+	ret
+lookca:	seto t,		;say abbrev
+	ret
+
+hlpkey:	call chkhlp
+	movei i,0
+	jrst hlpsw0
+hlpswi:	movei i,1		;i - 1 if switches
+	call chkhlp		;see if user gave help
+hlpsw0:	outstr [asciz / one of the following:/]
+	move g,.cmdat(c)	;get switch table
+	hlrz h,(g)		;make aobjn word in H
+	movn h,h
+	hrl h,h
+	hrri h,1(g)
+	jumpge h,hlpswx		;nothing to do
+  ;first we figure out the maximum length of the switches
+hlpsw1:	move j,h		;use copy
+	movei l,2		;l will get max len
+	jumpge j,hlpsw5
+hlpsw2:	hlrz g,(j)		;start of this one
+	hrli g,010700
+	movei k,2(i)		;start with 0 for key, 1 for swi, +2
+hlpsw3:	ildb t,g		;get next char, and count char's in K
+	jumpe t,hlpsw4
+	aoja k,hlpsw3		;next char in this switch
+hlpsw4:	camle k,l		;l = l max k
+	move l,k
+	aobjn j,hlpsw2		;next switch
+hlpsw5:	movei j,.towid		;get terminal width
+	seto k,
+	trmno. k,		;find our term's udx
+	 jrst use72		;can't - assume 72 wide
+	move t,[xwd 2,j]
+	trmop. t,
+use72:	 movei t,^D72		;can't - assume 72 wide
+	hrl j,t
+	hrr j,l
+	setz l,
+  ;loop to print out things
+  ;g - ildb addr in string
+  ;h - aobjn addr in table
+  ;i - flag is switch
+  ;j - LH - line length, RH - object len
+  ;k - char's left in this object
+  ;l - char's left in line
+hlpswl:	hlrz g,(h)		;get the string address
+	cail l,(j)		;room for one obj on this line?
+	jrst hlpsw6
+	outstr [asciz /
+/]				;no - go to new one
+	hlrz l,j		;and reinit line
+hlpsw6:	hrrz k,j		;init object size ctr
+	outchr [exp " "]
+	subi l,1
+	subi k,1
+	skipe i			;put out / only if switches
+	outchr [exp "/"]
+	sub l,i
+	sub k,i
+	hrli g,010700		;make byte pointer to string
+  ;loop on string
+hlpsw7:	ildb t,g
+	jumpe t,hlpsw8
+	outchr t
+	subi l,1		;and count
+	soja k,hlpsw7
+  ;now put out trailing blanks if any
+hlpsw8:	outchr [exp " "]
+	subi l,1		;count
+	sojg k,hlpsw8
+  ;go to next item
+	aobjn h,hlpswl
+hlpswx:	outstr [asciz /
+/]
+	ret
+
+;copy switch into atom buffer
+copysw:	jumpe f,cpopj		;make sure there is something there
+	move g,.cmabp(a)	;get place to put it
+	move h,.cmabc(a)
+	subi f,1
+	ildb t,e		;get the slash (one assumes)
+	caie t,"/"		;if slash
+	ret			; not - done
+	idpb t,g		;copy it
+	subi h,1		;and count it
+	call cpykw1		;copy rest of keyword
+	skipa
+	jrst cpopj1
+	move t,e		;see if have a term :
+	ildb t,t
+	skipe f
+	caie t,":"
+	ret			;no - done
+	ildb t,e		;yes - copy it
+	subi f,1
+	dpb t,g
+	subi h,1
+	jumpe h,copyks		;and make asciz
+	setz t,
+	idpb t,g
+cpopj:	ret
+
+;copy keyword into atom buffer
+copykw:	move g,.cmabp(a)	;g _ ptr to at buf
+	move h,.cmabc(a)	;h _ cntr to at buf
+cpykw1:	move i,e		;i _ ptr to input
+	move j,f		;j _ cntr to input
+copykl:	jumpe h,copyks		;test for done
+	jumpe j,copykx
+	ildb t,i		;copy char
+  ;now stop unless it is alphanumberic
+	cain t,"-"		;- is alph
+	jrst copyko
+	caige t,"0"
+	jrst copykx		;below numbers
+	caig t,"9"
+	jrst copyko		;is a number, ok
+	caige t,"A"
+	jrst copykx		;between numbers and letters
+	caig t,"Z"
+	jrst copyko		;is a letter, ok
+	caige t,"a"
+	jrst copykx		;between upper and lower case
+	caig t,"z"
+	jrst copyko		;lower case, ok
+	jrst copykx		;above lower case
+   ;here if it is alphnumeric
+copyko:	soj h,
+	soj j,
+	move e,i		;make permanent
+	move f,j
+	idpb t,g
+	jrst copykl
+copykx:	setz t,			;make at buf asciz
+	idpb t,g
+	ret
+
+;swcomp - completion for switches - g has bpt to user's string in atbuf,
+;  k has space in at buf.
+swcomp:	jumpe f,cpopj		;see if esc is next
+	move t,e		;peek
+	ildb t,t
+	caie t,33
+	ret			;no escape
+;now see whether user's string or switch ends first
+	movs j,(b)		;j - bpt to string in table
+	hrli j,000700
+compl:	move t,g		;peek at next user's char
+	ildb t,t		;t - user's char
+	ildb h,j		;h - match char
+	caie t,":"		;no compl if user ends with :
+	cain h,0		;or if match ends first
+	ret			;nothing to complete
+	cain t,0		;user ends without match ending
+	jrst docomp		;that's when we complete
+	ibp g			;advance source - G and K
+	subi k,1
+	jrst compl		;no end, keep going
+  ;here we actually do the completion
+docomp:	movsi t,(cm%esc)	;say we did completion (for noise)
+	iorm t,.cmflg(a)
+	outchr [exp 10]		;back over esc
+	move i,.cmcnt(a)	;i _ last legal position in buffer
+	adjbp7 i,.cmbfp(a)	;normalize
+	tlnn i,400000		;if 440700
+	jrst endskx		;not
+	tlc i,450000		;change to 010700
+	subi i,1		;in previous word
+  ;start of copy loop
+docmpl:	jumpe k,copyks		;out of space?
+	idpb h,e		;now copy to text
+	idpb h,g		;and atom
+	outchr h		;and terminal
+	camn e,i		;see if at end of buffer
+	jrst cmtool		;yes - line too long
+	aos .cminc(a)		;one more thing in buf
+	ildb h,j		;get next char
+	skipe h			;if something there
+	soja k,docmpl		;now loop for more
+ ;end of loop - make asciz
+	jumpe k,copyks		;make outputs asciz
+	move t,e		;use copy of bpt since this is one ahead
+	idpb h,t
+	camn t,g		;see if this went too far
+	jrst cmtool
+	idpb h,g		;and in atom buffer
+	ret
+
+dosnom:	movei b,[asciz /does not match switch or keyword/]
+	movem b,errstr
+cpopj1:	aos (p)
+	ret
+
+dosamb:	skipa b,[exp [asciz /ambiguous switch or keyword/]]
+copyks: movei b,[asciz /switch too long for internal working space/]
+	movem b,errstr
+	aos (p)
+	ret
+
+dosnul:	skipa b,[exp [asciz /null switch or keyword given/]]
+dosnsw:	movei b,[asciz /not a switch - does not begin with a slash/]
+	movem b,errstr
+	aos (p)
+	ret
+
+	subttl numbers
+
+;This parses a number and stops on first non-digit
+donux:	call getskp
+	jrst hlpnum	
+	call numcpy
+	 skipa
+	 jrst cpopj1
+	move i,.cmabp(a)	;i - source
+	move h,.cmdat(c)	;h - radix
+	cail h,2
+	caile h,^D10
+	jrst donumr		;bad radix
+	ildb g,i		;and it had better be a digit
+	cail g,"0"
+	caile g,"0"(h)		;in the proper radix
+	jrst donumd		;not a digit
+	subi g,"0"
+	move b,g		;init b to first digit
+;now loop as long as there are more digits
+donuxl:	ildb g,i
+	cain g,0		;done if nothing more
+	ret
+	subi g,"0"		;turn g into number
+	call .%adgb		;add digit (in pasnum to avoid overflow)
+	jrst donumo		;overflow
+	jrst donuxl
+
+;This parses a number, and requires that the whole atom form a legal number
+donum:	call getskp
+	jrst hlpnum	
+	call copykw		;copy whole atom
+	 skipa
+	 jrst cpopj1
+	move i,.cmabp(a)	;i - source
+	move h,.cmdat(c)	;h - radix
+	cail h,2
+	caile h,^D10
+	jrst donumr		;bad radix
+	setz b,			;start with zero
+;now loop as long as there are more digits
+donuml:	ildb g,i
+	cain g,0		;done if nothing more
+	ret
+	cail g,"0"
+	caile g,"0"(h)		;in the proper radix
+	jrst donmnd		;not a digit
+	subi g,"0"		;turn g into number
+	call .%adgb		;add digit (in pasnum to avoid overflow)
+	jrst donumo		;overflow
+	jrst donuml
+
+hlpnum:	call chkhlp		;check for user help
+	move g,.cmdat(c)	;get radix
+	cail g,2		;make sure it is valid
+	caile g,^D10
+	 jrst [	outstr [asciz / illegal radix for input number
+/]
+		ret]
+	cain g,^D8
+	 jrst [	outstr [asciz / octal number
+/]
+		ret]
+	cain g,^D10
+	 jrst [	outstr [asciz / decimal number
+/]
+		ret]
+	outstr [asciz / a number in base /]
+	addi g,"0"
+	outchr g
+	outstr [asciz /
+/]
+	ret
+
+numcpy:	move g,.cmabp(a)	;g - dest
+	move h,.cmabc(a)	;h - dest count
+	move i,.cmdat(c)	;i - radix
+	cail i,2
+	caile i,^D10
+	jrst donumr		;bad radix
+numcpl:	jumpe f,numcpx		;if nothing there, done
+	jumpe h,numtol		;if no space left, error
+	move t,e		;peek
+	ildb t,t
+	cail t,"0"
+	caile t,"0"(i)
+	jrst numcpx		;not legal - done
+	ildb t,e		;done, copy it
+	subi f,1
+	idpb t,g
+	subi h,1
+	jrst numcpl
+
+numcpx:	jumpe h,numtol		;done, make asciz
+	setz t,
+	idpb t,g
+	ret	
+
+donmnd:	movei b,[asciz /invalid character in number/]
+	movem b,errstr
+	aos (p)
+	ret
+
+numtol:	skipa b,[exp [asciz /number too long for internal working space/]]
+donumr:	movei b,[asciz /radix is not in range 2 to 10/]
+	movem b,errstr
+	aos (p)
+	ret
+
+donumo:	skipa b,[exp [asciz /overflow (number is greater than 2**35)/]]
+donumd:	movei b,[asciz /first nonspace character is not a digit/]
+	movem b,errstr
+	aos (p)
+	ret
+	
+	subttl Simple COMND functions
+
+;cpyone - copy one char into atom buffer
+cpyone:	jumpe f,cpopj
+	ildb t,e
+	subi f,1
+	move g,.cmabp(a)
+	idpb t,g
+	setz t,
+	idpb t,g
+	ret
+
+;hlpnul - default help is nothing
+hlpnul:	call chkhlp		;check for user help
+	aos (p)			;return +3 (chkhlp did +2)
+	ret
+
+docfm:	call getskp
+	jrst hlpcfm
+	call cpyone
+	move g,.cmabp(a)
+	ildb t,g
+	cain t,12		;better be LF
+	ret			;yes
+docfmn:	movei t,[asciz /not confirmed/]
+	movem t,errstr
+	aos (p)
+	ret
+
+hlpcfm:	call chkhlp		;check for user help
+	outstr [asciz / confirm with carriage return
+/]
+	ret
+
+docma:	call getskp
+	jrst hlpcma
+	call cpyone
+	move g,.cmabp(a)
+	ildb t,g	
+	cain t,","		;better be comma
+	ret			;yes
+	movei t,[asciz /comma not given/]
+	movem t,errstr
+	aos (p)
+	ret
+
+hlpcma:	call chkhlp		;check for user help
+	outstr [asciz / comma
+/]
+	ret
+
+;Noise is very odd, because usually no input is to be read.  Output
+; is triggered by an escape in the previous.  The current code will
+; not recognize noise if input, and will not respond to help.  The
+; problem is that ? is almost certainly for the next field, not this
+; one.  Probably the code should go
+;   put out noise if requested
+;   skip any noise in input
+donoi:	move g,.cmflg(a)
+	tlnn g,(cm%pfe)		;only do this is prev field was escape
+	ret
+	outstr [asciz / (/]
+	move g,.cmdat(c)
+donoil:	ildb t,g
+	jumpe t,donoix
+	outchr t
+	jrst donoil
+donoix:	outstr [asciz /) /]
+	ret
+
+dofld:	call getskp
+	jrst hlpnul
+	call copykw
+	 skipa
+	 jrst cpopj1
+	ret
+
+;dotok - compare input with given token, after skipping blanks
+dotok:	call getskp
+	jrst hlptok
+	jrst dotoka		;need to read from main input
+;already in atom buffer
+	move i,.cmabp(a)	;g _ ptr to at buf
+	move j,.cmabc(a)	;h _ cntr to at buf
+	move k,.cmdat(c)	;k _ ptr to token to check for
+	setz h,			;h _ 0 ; flag not to gobble chars
+	jrst dotokl
+
+dotoka:	move i,e		;i _ ptr to input
+	move j,f		;j _ cntr to input
+	move k,.cmdat(c)	;k _ ptr to token to check for
+	seto h,			;h _ -1 ; flag we want to gobble chars
+
+dotokl:	ildb t,k		;t _ target char
+	jumpe t,dotokx		;if end of token, matched it OK
+	jumpe j,cpopj1		;  or input, error
+	ildb l,i		;l _ input char
+	cail l,"a"		;make upper case
+	caile l,"z"
+	jrst .+2
+	subi l,40
+	came l,t		;see if it matches
+	jrst cpopj1		;no
+	soja j,dotokl
+
+dotokx:	jumpe h,cpopj		;if weren't reading char's, done
+	move e,i		;make it permanent
+	move f,j
+	ret			;done
+
+hlptok:	call chkhlp		;check for user help
+	move g,.cmdat(c)	;none - put out default
+	outstr [asciz / "/]
+hlptkl:	ildb t,g
+	jumpe t,hlptkx		;done at end of string
+	outchr t
+	jrst hlptkl
+hlptkx:	outstr [asciz /"
+/]
+	ret
+
+	subttl Directory and user
+;On Tops-10, I define a directory as being [p,pn,sfd...]
+;  and a user as being [p,pn].  One could argue that user should
+;  be p,pn without brackets, but this seems so unusual that I am
+;  not going to do it.
+dousr:	call getskp
+	jrst hlpusr
+	call copydr
+	 skipa
+	 jrst cpopj1
+	movei g,0
+	jrst dodir1
+
+dodir:	call getskp
+	jrst hlpdir
+	call copydr
+	 skipa
+	 jrst cpopj1
+	movei g,1
+dodir1:	push p,a
+	push p,c
+	push p,d
+	push p,e
+	push p,f
+	push p,t
+	hrrz b,.cmabp(a)
+	move c,g		;g - is SFD allowed?
+	call cmdird
+	move b,2(p)
+	pop p,t
+	pop p,f
+	pop p,e
+	pop p,d
+	pop p,c
+	pop p,a
+	jumpe b,illdir
+	ret
+
+hlpusr:	call chkhlp
+	outstr [asciz / [p,pn]
+/]
+	ret
+
+hlpdir:	call chkhlp
+	outstr [asciz / [p,pn,sfd...]
+/]
+	ret
+
+;copy directory into atom buffer
+copydr: move g,.cmabp(a)	;g _ ptr to at buf
+	move h,.cmabc(a)	;h _ cntr to at buf
+copydl:	jumpe h,copyks		;test for done
+	jumpe f,copydm
+	ildb t,e		;copy char
+	soj h,			;count it
+	soj f,
+	idpb t,g
+	caie t,"]"		;stop when ]
+	jrst copydl
+copydx:	jumpe h,copyks		;make at buf asciz
+	setz t,
+	idpb t,g
+	ret
+
+copydm:	jumpe h,copyks
+	setz t,
+	idpb t,g
+	skipa b,[exp [asciz /directory does not end in ]/]]
+illdir:	movei b,[asciz /syntax error in directory/]
+	movem b,errstr
+	aos (p)
+	ret
+
+	subttl floating point numbers
+
+doflt:	
+	
+> ;ifn simcom
+
+
+	end

@@ -1,0 +1,314 @@
+I have noticed the following problems in a careful reading of the
+Standard:
+
+FOR I := J to K.   If I is a subrange, J and K must be within it if
+	the loop is executed.  However if J > K, so that the loop is
+	never done, J and K may be outside the range.  This compiler
+	will give an error in such cases.
+
+For set assignment, subranges are not enforced.  Technically this is
+	OK, as we are free to ignore errors, but this is an important
+	enough one that it should be fixed.
+
+
+The following problems showed up in the TeKoLa Pascal Validation Suite.
+
+When you declare a packed array and the component type takes a full work
+	(e.g. PACKED ARRAY [..] OF INTEGER), it is treated as not
+	packed.  The only problem with this is that the procedures PACK
+	and UNPACK will not work with the array.
+		FIXED
+Round(-3.5) is wrong on KI's and KL's.  We currently use the FIXR
+	instruction.  This gives the wrong result for numbers of this
+	form.  Note that this error occurs on a set of measure 0. That
+	is, -3.500001 and -3.4999999 are OK.  The only error is the
+	exact point where the boundary occurs.  
+		FIXED.  ROUND now takes 4 instructions on KI/KL
+A case statement with highly sparse cases does not work.  E.g. CASE foo
+	OF -MAXINT... 0... +MAXINT.  CASE constructs a jump table.
+	Obviously this will not work beyond a certain point.  (This test
+	either caused the compiler to loop or to use a *very* large
+	amount of CPU time.)
+		FIXED.  I now have two styles of compiling CASE
+		statements.  Jump tables are used unless the thing
+		is too sparse, in which case CAIN/JRST code is used.
+(. and .) are alternate forms of [ ].  This compiler does not accept
+	them.
+		FIXED.	
+Types of the form ^TEXT (actually ^ to any file type) are not legal. You
+	can use files as components of records to which there is a
+	pointer.  You just can't use them alone.
+		FIXED.
+Array[integer] is rejected.  According to the author of the test it
+	should be legal to say type foo=array[integer] of integer as
+	long as you don't actually declare any variable of that type.  I
+	think that is debatable.
+		No immediate plans to fix this one.  Code generation
+		assumes that array indices are finite types.  Changes
+		would be pervasive, and I judge dangerous.  Clearly
+		any program that actually uses such a type will be
+		impossible to execute.  I do not see that it is a bug
+		to reject something that is going to cause trouble
+		as soon as possible.
+Suppose you have S : set of 0..63.  According to the author of the test,
+	if you ask -1 in S or 64 in S, you should get FALSE. You don't
+	always.  I would have thought it was an error to do that.
+		FIXED.  By the way, someone has suggested that it
+		is not legal for me to restrict sets to have
+		elements between 0 and 71.  I would be mildly 
+		interested in seeing a definitive answer to that.
+		Clearly I am allowed to restrict the size of sets.
+		It turns out to be moderately complex to do code
+		generation if sets can start at different places.
+		Things like [1,2,71] + [10001,10002,10071], etc.
+
+Rachel Schwab at NIH has kindly run A.H.J. Sale's Pascal Validation
+Suite for me.  There are 4 kinds of tests:
+  conformance - see if a correct program works
+  deviance - see if an incorrect program is detected
+  error check - see if runtime checks work
+  quality - see how well the compiler handles things where the
+	implementor has the option of being cheap
+
+I am starting on conformance tests, as these seem the most crucial.
+The summary states that of 137 tests, there were 21 failures.  I am
+going to list the failures.  Some of these should just be taken as
+warnings that until I fix them, the things shown will not work.
+In other cases I am looking for advice.
+
+6.2.2-3   Arthur Sales' favorite bug:  
+	      type T=foo;
+	      procedure x;
+	        type X=^T;
+		     T=bar
+	  X ends up defined as ^foo when it should be ^bar.  this is
+	  because the compiler is a bit too much one-pass.  This is
+	  fixable, and I will fix it.  Note that the problem is the
+	  fact that T was defined at an outer block level.  Had the
+	  T=foo not been there, x=^T would have been recognized as
+	  a forward reference and handled properly.
+		 FIXED
+
+6.2.2-8   Assignment to a function works only at the top level of
+	  the function.  It should also work within any functions
+	  declared within that function.  I guess I agree with that.
+	  This should be easy to fix, if everyone agrees with Sales'
+	  interpretation of the language spec.
+		FIXED
+
+6.4.3.3-1 and 6.4.3.3-3    Compiler ill mem ref's when compiling
+	some degenerate record declaration.  Probably a null record
+	declaration.  This should be easy to fix.
+		FIXED
+
+6.4.3.5-1    Supposedly the compiler failed when asked to compile
+	file of a pointer type.  I claim that the test is erroneous.
+	First, it is not clear to me what a file of pointers is.
+	But more important, they have FILE OF X, where X is a local
+	variable.  I have tried a simple test using FILE OF ^INTEGER,
+	and it seems to work (though I am still not sure what it
+	means).
+		ERROR IN TEST
+
+6.4.3.5-2   This is the first of several tests that fail because of
+	the way EOLN is handled.  In the Revised Report, when you
+	reach the end of line on INPUT, INPUT^ is supposed to contain
+	a blank, and GET(INPUT) will get the first char of the next
+	line.  In this implementation, INPUT^ contains <cr>, <lf>, or
+	whatever.  And if the end of line is <cr>,<lf>, it takes two
+	GET's to get to the next line.  However a single READLN will
+	still work. Other tests that fail because of my current end of
+	line processing will simply refer to "the EOLN problem".
+		FIXED
+
+6.5.1-1  Arrays of files are not allowed nor are files allowed to be
+	items in a record.
+		FIXED.
+
+6.6.3.1-5 and 6.6.3.4-2   These two tests purport to test what goes
+	on when you pass procedures as parameters to other procedures.
+	Unfortunately they assume a non-standard syntax for procedure
+	declarations in this case (the syntax in the ISO proposal 
+	rather than in the Revised Report).  As far as I know, our
+	system would handle their test properly if the syntax was
+	fixed.  Eventually I will probably adopt the ISO syntax also.
+		PROBABLY FIXED.
+
+6.6.5.2-3    This program does RESET(FYLE), where FYLE is a local
+	variable (i.e. not mentioned in the program statement), and
+	no REWRITE has ever been done to the file.  My Pascal
+	distinguishes between empty files and files that do not
+	exist at all.  This test wants the file to be treated as
+	empty, i.e. the RESET works but you get EOF(FYLE).  Instead
+	my runtime system complains that you have tried to open
+	a non-existent file "DSK:FYLE.", and prompts for a new file
+	name (at least I hope that is what it did - Rachel didn't
+	say exactly what happened).  Clearly my intepretation is a
+	remnant of thinking of FILE's in Pascal as operating system
+	files, rather than as abstract sequence variables.  For my
+	purposes my interpretation is more useful.  However I agree
+	with Sales that the language seems to imply the other
+	interpretation.  I seem to have the following choices:
+	   - another {$... kludge
+	   - another optional extra parameter to RESET
+	   - ignore the Pascal spec
+	I regard the abstract sequence interpretation as a nightmare
+	and propose to ignore this problem.
+		FIXED for internal files.  For external files
+		it seems most likely that this is a user error,
+		and you are still prompted for a new file name.
+
+6.6.2-3   Some undetermined error with EXP, apparently a bad value
+	returned.  Pascal uses Fortran numerical routines.  They
+	depended upon special handling of overflow.  Pascal now
+	does this.
+		FIXED
+
+6.8.3.5-4   Compiler does not handle a sparse CASE statement.  I
+	believe this has been fixed since.
+		FIXED
+
+6.8.3.9-7   FOR I := 1 TO MAXINT causes overflow the last time
+	through.  This is a monster.  Currently this loop is
+	implemented
+	   i := 1;
+	   while i <= maxint do
+	     begin
+	     stuff...;
+	     i := i + 1
+	     end;
+	So clearly the last time through the loop the program
+	tries to compute maxint+1 and overflows.  The problem is
+	that the Revised Report clearly states that a FOR loop
+	is equivalent to
+	   i := start; S; i := i+1; S; i:= i+1; S; ... i := end; S;
+	That is, I is NOT incremented after the final occurence
+	of the body.  Indeed it seems that according to the Revised
+	Report the value of I at the end of the loop is well-defined
+	if end >= start  (I would be left equal to END), and that the
+	whole construction is illdefined otherwise.  This conflicts
+	with the User's Guide (which is bound in the same volume),
+	which states explicitly that if end < start, the FOR 
+	statement is not executed (presumably this means that
+	I is unchanged, and that the sideeffects of any functions
+	called while evaluating START and END are undone), and
+	that if the FOR loop is normally exited, the value of I is
+	undefined.  So one has a generally ill-defined mess here.
+
+	My initial inclination is to change things as follows:
+	   for i := m to n do P:
+		move t,m
+		movem t,i
+		skipa
+	loop:	aos i
+		 ...P...
+		move t,i
+		camge t,n
+		jrst loop
+	This would leave I set to M if the loop never gets done
+	(N < M), and set to N otherwise.  The overflow when N
+	is MAXINT would not occur.  The problem with this change
+	is that I know that I have code that depends upon the
+	fact that I is now left at N+1 after a normal exit from
+	the loop.  I fear that other users do, too.  And worse,
+	that the compiler may.  Changing this is likely to result
+	in subtle problems showing up in the compiler and many
+	other Pascal programs.  The question is, is the cure
+	worse than the disease in this case?  Note that it is not
+	really fair to use MAXINT in conformance tests, since the
+	Report doesn't even define MAXINT.  Nor as far as I can
+	see do they ever state what is supposed to happen when
+	integer arithmetic overflows.  It is nearly hopeless to
+	get a really clean result on the PDP-10, so overflow
+	with negative numbers happens at -MAXINT-1, not -MAXINT
+	(because of 2's complement arithmetic).  I suspect that
+	Sales is being a bit too literal-minded about the
+	definition of FOR here.
+		COMPLEX, probably not worth fixing.  [probably
+		based on ISO, too]
+
+6.9.1-1 and 6.9.3-1    EOLN problem
+		FIXED
+
+6.9.4-3, 6.9.4-4, 6.9.4-7, and 6.9.5-1   These tests check what
+	is written by WRITE applied to integers, reals,
+	Booleans, and WRITELN.  To check exactly what is 
+	written, they read the string back into a packed array
+	of char, and then look at it.  Alas, since standard
+	Pascal can't read into strings, they use code like
+	   for i := 1 to 10 do
+	     read(b[i]);
+	Now the problem with this is the B is a packed array.
+	According to the Revised Report, it is illegal to pass
+	an element of a packed array to a procedure by reference.
+	It seems that this is exactly what is being done, and
+	the compiler refuses it.  The problem, of course, is that
+	call by reference is done by passing an address, and
+	there is no address to pass for an object in the middle
+	of a packed array.  (They could have passed a byte pointer,
+	but then procedures taking reference parameters would have
+	to assume that all of its parameters are byte pointers,
+	which would slow things down.)  Now we could certainly
+	change the implementation such that READ is not implemented
+	by passing the address of B[I].  Instead the internal
+	routines could be made into functions, and the compiler
+	could retrieve the returned value and assign it.  The
+	compiler could then do the deposit byte into packed
+	structures.  But I guess I think that what they have done
+	is in fact illegal Pascal, and I don't know how much
+	trouble I want to go to to make it work.
+		FIXED (i.e. you can now read into packed objects)
+	Rachel tells me that some of these tests still don't work.
+	I have checked Jensen and Wirth, and think that WRITE
+	does what it says.  I do not know the current status of
+	this problem, but will fix any problems if someone will
+	give me enough information to duplicate the problem.
+		UNKNOWN status
+
+6.9.4-15   I will have to look into this.  Rachel seems to have
+	mistyped something.  But what it looks like is that if
+	you do WRITE(X), where X is not a file (i.e. you default
+	the output file name), you get the current definition
+	of OUTPUT.  That is, if you have a local variable called
+	OUTPUT, that is what you get.  According to the Revised
+	Report, when you default the file name you get the
+	standard file OUTPUT, not whatever local definition may
+	be in effect.  This should be easy to fix, and I will
+	fix it.
+		FIXED
+
+Other problems not showing up in the validation suite:
+
+READ and WRITE are not implemented for non-TEXT files.  READ(f,x)
+	should be equivalent to x := f^; get(f) in this case.
+		FIXED
+
+The funny pseudo-type POINTER cannot be passed by reference.
+The code clearly does not intended to distinguish between call
+by ref and call by value for these pseudo-types.  There is a
+history of sufficient subtlety that I don't dare change this
+right before a major release of the system.
+		FIXED
+
+Upper and lower case letters are treated as the same in sets
+		FIXED
+
+Only 5 parameters can be passed to a parametric procedure.
+The problem here is the with Jensen and Wirth's parametric
+procedures, one can't verify at compile time that the
+number of parameters the user has passed is right.  One
+could do it at runtime, but special machinery would be
+needed.  If the user gets it wrong, the stack will be blown,
+and nobody (probably even PASDDT) will know what is going on.
+I decided to be safe by only allowing the number of args
+that will fit into the AC's.  Then if he blows it, nothing
+serious will be wrong.  This whole problem will go away
+when the ISO standard is adopted and I implement it, since
+one will be able to check arguments at compile time.
+		FIXED if you use ISO syntax
+
+It is not possible to read the smallest negative integer.
+This will never show up on a validation test, since I
+can read -MAXINT.
+		COMPLEX - requires rewriting integer read,
+		which will not be done soon

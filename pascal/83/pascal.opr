@@ -1,0 +1,672 @@
+
+
+
+                              PASCAL-20
+
+
+			Installation Document
+
+
+
+
+
+
+
+
+
+
+
+The  information  in this document is subject to change without notice
+and should not be construed as a  commitment  by  Charles  Hedrick  or
+Rutgers  University.  Charles Hedrick and Rutgers University assume no
+responsibility for any errors that may appear in this document.
+
+Note:    The  following  are  trademarks  of  the  Digital   Equipment
+Corporation:  DECSYSTEM-20, DECsystem-10, Tops-20, Tops-10
+
+
+By agreement between Rutgers and DEC, this version of Pascal is
+considered to be in the public domain.  Because this is not copyrighted,
+we have no legal ability to place restrictions upon it use or
+distribution. However we would appreciate it if you would follow the
+following rules, as a matter of courtesy.
+
+  - you should give credit to Charles Hedrick and/or Rutgers University
+	when describing the system in documentation or publications.
+	Any documentation for System Programmer's Pascal that is more
+	than 30 pages long should include the entire content (though not
+	necessarily in exactly the same form) of the acknowlegement
+	section from PASCAL.DOC.
+
+  - if you change System Programmer's Pascal sufficiently that it no
+	longer makes sense to consider it the same program,
+	documentation for your program should state that it is based on
+	System Programmer's Pascal, acknowledging Charles Hedrick and
+	Rutgers University.  Any document that is more than 30 pages
+	long should include the entire content (though not necessarily
+	in exactly the same form) of the acknowlegement section from
+	PASCAL.DOC, and a rough indication of how much of the system and
+	documentation is your own and how much is System Programmer's
+	Pascal.
+
+We would appreciate it if you did not send copies to other people, but
+refered them to Charles Hedrick
+   CCIS
+   Rutgers University
+   P.O. Box 879
+   Piscataway, NJ  08854
+We will be happy to send current copies to anyone who supplies us with a
+2400' reel of tape, a container in which it can be returned, and return
+postage (preferably as stamps or postage meter tape, not checks).  The
+reason for sending people to us is so we can make sure that what they
+get is the most recent version, and so we can keep a list of who are
+users are and make sure what they get is up to date.  We do realize that
+this will be  cases where there is some specific reason why it is not
+practical to send someone to us.  In particular, if one of your users
+leaves your site, he should feel free to take the version of the system
+that he is currently using with him.  Should you get a copy of System
+Programmer's Pascal from someone else, including DECUS, please notify us
+at the above address.  While we do not promise to do anything in
+particular with your name and address, having it will at least make it
+possible for us to get in contact will all users in case we have to.
+
+			****************
+If you find it necessary to redistribute this software, please make
+certain that you send the whole distribution.  We have had bad
+experiences with people who ended up getting programs but not the
+documentation, or otherwise incomplete distributions.  In particular,
+we would appreciate it if you would send source to anyone you send
+this to.  That way, should it be necessary to fix something, we can
+simply tell them to change the appropriate line in the source and
+regenerate the system.  If you don't have source, it will be nearly
+impossible for us to help you
+			****************
+
+
+Brief installation instructions for those using EXEC version 5 or 5.1
+and LINK version 5.1:
+
+minimal operable system.  This system does not support extended
+addressing or use the shared runtime segment.
+	copy pascal.exe  sys:pascal.exe
+	copy pasddt.rel  sys:pasddt.rel
+	copy pasuns.rel  sys:paslib.rel   ;note change in name
+documentation:
+	copy pascal.doc  doc:pascal.doc
+	copy pascal-mem.doc  doc:pascal.mem   ;note change in name
+full system.  This supports extended addressing and uses the sharable
+runtime segment.
+	copy pascal.exe  sys:pascal.exe
+	copy pasddt.rel  sys:pasddt.rel
+	copy paslib.rel  sys:paslib.rel
+	copy passeg.exe  sys:passeg.exe
+	copy psxlib.rel  sys:psxlib.rel    ;for extended addressing
+	copy pasuns.rel  sys:pasuns.rel    ;allows users to choose 
+					   ;;non-sharable runtimes
+
+There is also a version of the compiler that has patches for the
+problems described in the beware file.  To use that, copy pasnew.exe to
+sys:pascal.exe.  
+
+If you have an older version of the system:
+	3A or 4: See sections below:  "compiler, release 3 and 4",
+		"compiler, release 3 and 4, for those not modifying
+		the EXEC", "EXEC changes, release 3 and 4"
+	5:  If you do not have version 5.1 of LINK (which comes with
+		version 7 of Fortran), and if you want the DEBUG
+		command to work, see section below "LINK, release 5"
+		COMPILE, LOAD, and EXECUTE will work on release 5
+		without this fix.  Only DEBUG is a problem.
+
+NB:  The version of Pascal contained in this distribution is "frozen".
+We have had enough trouble with bugs creeping in due to bad testing that
+we had decided to adopt DEC's ideas.  We attempt to freeze the code, test
+it as much as possible, and if it seems OK we send out that version.  We
+resist the temptation to make "improvements" at the last minute, since
+they may introduce problems that are hard to predict. PASCAL.BWR will
+list problems discovered since the code freeze.  In several cases we
+believe we have fixes to these problems.  These fixes are developed and
+tested using our current development version.  However the development
+version contains a number of new features that it would not be
+appropriate to distribute yet.  Thus we have a sort of compromise.
+PASNEW.PAS is based on the frozen version.  In addition it has a few
+edits from the development version which we believe fix bugs that some
+users may find serious.  If you need any of these fixes, you should
+rename PASNEW.PAS to PASCMP.PAS and follow the instructions below for
+compiling a new version.
+
+The net result of this policy is that our officially distributed
+compiler has a few known bugs.  However I have come to believe that it
+is better to have a few known, minor bugs than a few last minute fixes.
+
+
+
+This file describes the files used in the "new" Pascal-20, i.e. the
+version that does not depend upon the Pascal-10 compiler and runtimes.
+Note that the compiler source files (pascmp.pas, as well as the
+temporary passcn.mac and paslnk.mac) are still more or less the same
+as the corresponding files for Pascal-10.  This will be kept that way
+as much as possible.
+
+There are now versions of Pascal for all combinations of the 
+operating systems Tops-20, Tops-10, and Tenex, and the hardware 
+KL-10, KI-10, and KA-10.  (The Tenex versions have a few minor 
+features missing.) This file describes the Tops-20 version.  If you 
+are a Tenex site, this file is also applicable to you, but you should 
+also have received a small save set containing binaries for Tenex and 
+a file TENEX.OPR explaining a few oddities of the Tenex 
+implementation.  The sources for Tenex are the same as for Tops-20.  
+If you are a Tops-10 site, you should have received a completely 
+different distribution from this one.
+
+There are three different versions of the compiler:
+
+  PASCAL - This is designed for release 5 and later.  It uses the new
+	native-mode interface between the EXEC and the compiler. You
+	will not need to make any changes to the EXEC to use this
+	version of the compiler.  This is entirely native mode.  This
+	version combines the features of PASCAL and PAS in earlier
+	releases.
+
+  PASCAL4 - If you are running release 3 or 4, you should rename
+	PASCAL4.EXE to PASCAL.EXE.   This is designed to be called by
+	the release 3 and 4 EXEC.  Although it runs in native mode, it
+	uses SCN7B (the standard Tops-10 command scanner) to scan the
+	command line. This is done because under releases prior to
+	release 5, the EXEC assumed that all compilers were Tops-10
+	compilers. Small modifications to the EXEC are needed to allow
+	it to call this compiler.
+
+  PAS - this is designed for sites running release 3 and 4 that
+	do not want to modify their EXEC to interface to PASCAL.
+	It bypasses the EXEC completely.  This is entirely native mode.
+
+
+Note that the memory structure of Pascal-10 and Pascal-20 programs
+is slightly different.  The two compilers are as compatible as
+possible at the source code level, but the .rel files should be
+used only on the machine for which they were compiled, and they should
+be loaded with the proper runtimes.  A Tops-10 core image (.EXE file)
+can be executed on Tops-20 under the emulator, if it was produced by
+edit 74 or later of the Tops-10 compiler.  This export does not
+usually include the Tops-10 compiler.
+
+Should you wish to produce a compiler that compiles code to run on
+Tops-10, you should edit pasprm.pas to set the appropriate switches
+and then recompile.  To produce a compiler that compiles code for
+Tops-20 and runs on the 10, you must start with the Tops-10 compiler
+and runtimes and recompile them on a PDP-10 with modified pasprm.pas.
+I.e. the compilers can each compile code for either machine, if the
+appropriate switches are set in pasprm.pas.
+
+The distributed version assumes that the Pascal runtime library is
+sys:paslib.rel.  This can be changed by editing pasprm.pas and
+recompiling, or by clever use of Filddt.  (The strings "SYS  " and
+"PASLIB    " are stored in Ascii in the compiler.)  Note also that
+by default PASLIB requests mapping in of a sharable segment,
+SYS:PASSEG.EXE.  The name of that file can be changed by editing
+PASLOW.MAC and rebuilding PASLIB.  (PASSEG.CTL will show you how to 
+do that.)  If you do not want to use a sharable segment, you can
+rename PASUNS.REL to PASLIB.REL.  (PASUNS.REL is a conventional
+library.)
+
+
+*******compiler for release 5*********
+
+Release 5 includes support in the standard EXEC for Pascal.  This
+support makes use of a new linkage convention between the EXEC and
+Pascal that uses Tops-20 file names and switches, instead of the Tops-10
+conventions used by release 4 and previous releases.  Because of these
+new conventions, we have been able to produce a new compiler that
+supplies the functions of the two separate compilers described above.
+PASCAL will accept commands in any of the following ways:
+
+  - it will interface to the EXEC for the COMPILE and EXECUTE commands.
+
+  - you can run it directly.  If you do, you will get a Tops-20
+	command scanner, which will prompt PASCAL>.  You can then
+	type the name of a source file to compile, with optional
+	switches, as described in the manual.  In addition to
+	the normal switches, you can use:
+		/LIST - create a listing file with a default file name
+		/LIST:<filename> - create a listing file with specified
+			name
+		/OBJECT:<filename> - specify the name of the .REL file
+		/NOBIN - do not create a .REL file
+		/OPTIMIZE - equivalent to /NODEBUG/NOCHECK
+
+  - you can type arguments on the same line, e.g.
+	PASCAL PROG.PAS
+    In this case, it will act as if you had run PASCAL directly,
+    and typed the same arguments to the "PASCAL>" prompt.
+
+The files are:
+
+pascmp.pas - main compiler source.  (identical to the tops-10
+		source, except that the extended lookup arguments
+		have been commented out in reset and rewrites in
+		the startup code.)
+pasprm.pas - parameter file "required" by pascmp.  Sets up operating
+		system and site dependent options.  If this is changed
+		you must recompile pascmp.pas and then reload.
+pasl5x.pas  -  the scanner itself, sort of equivalent to passcn.mac
+pasl5y.mac  -  a few MACRO support routines, sort of equivalent to
+		paslnk.mac
+pascal.ccl - an indirect file to LINK to load this. This command file
+		also assumes that PASUNS.REL is on DSK:.
+
+The compilation process assumes that you have the following .unv files: 
+	Pascal-20:  pasunv.unv [supplied with this distribution]
+	Tops-20	(normally on sys: at all Tops-20 sites): monsym.unv
+
+Two other general packages are used by pasl5x.pas.  The .MAC files are
+the source for the package, the .PAS files are designed to be INCLUDE'd.
+  pascmd.mac,pascmd.pas  - a general-purpose comnd jsys interface
+  string.mac,string.pas  - the (unimpressive) beginning of a set of
+	runtimes to do string manipulations on packed array of char.
+	This uses ADJBP, so Tenex people would have to convert them.
+	They are not used in the Tenex version at this time.
+
+Note that the same compiler source and .REL file is used as with the
+compilers describe above (PASCAL4.EXE and PAS.EXE):  only the command
+scanner is changed.  Because the this compiler interfaces properly
+to the EXECUTE command, it will not call LINK directly to load
+your program, as the compiler PAS.EXE intended for release 3 and 4
+will do.
+
+***********compiler, release 3 and 4***********
+
+If you are using release 3 or 4, you should rename PASCAL4.EXE to
+PASCAL.EXE and put it on the system.  
+
+Compiler source files.  (.rel files may or may not appear in your
+distribution.)
+
+pascmp.pas - main compiler source.  (identical to the tops-10
+		source, except that the extended lookup arguments
+		have been commented out in reset and rewrites in
+		the startup code.)
+pasprm.pas - parameter file "required" by pascmp.  Sets up operating
+		system and site dependent options.  If this is changed
+		you must recompile pascmp.pas and then reload.
+paslnk.mac - low-level compiler routines
+passcn.mac - compiler link to SCN7B, which is currently used to scan
+		the command line.  Note that paslnk and passcn are
+		temporary modules, until DEC allows us to supply a
+		real Tops-20 command scanner.
+
+The compilation process assumes that you have the following .unv files: 
+	Pascal-20:  pasunv.unv
+	Tops-10 (until paslnk and passcn are replaced): c.unv,
+		scnmac.unv
+	Tops-20	(normally on sys: at all Tops-20 sites): monsym.unv
+
+The loading process assumes that you have the following standard
+Tops-10 modules (also part of the temporary command scanner):
+helper.rel, scn7b.rel
+
+These auxilliary files are all included in the distribution, except
+for monsym.unv, which we assume you have.
+
+A file pas4.ccl is included.  It is an indirect command file for
+LINK to load the compiler.  To create a new compiler, compile
+PASCMP.PAS with the current pascal, and then do
+  @LINK
+  *@PAS4
+  */G
+  @SAVE PASCAL4
+This assumes that PASUNS.REL is on DSK:
+
+If you don't want to recompile the compiler, all you really need
+is the thing itself, which is
+
+pascal4.exe - Pascal-20 compiler for release 3 and 4, which should be
+	renamed to pascal.exe
+
+******compiler for those not adding PASCAL to the EXEC, release 3 and 4*******
+
+
+For those using release 3 or 4 who do not want to add PASCAL as a known
+language, there is an alternate command scanner that does not require
+the use of the  EXEC.  Note that this is not needed in release 5, as
+PASCAL does not need any EXEC modifications for installation under
+release 5.  The files are:
+
+pascmp.pas - main compiler source.  (identical to the tops-10
+		source, except that the extended lookup arguments
+		have been commented out in reset and rewrites in
+		the startup code.)
+pasprm.pas - parameter file "required" by pascmp.  Sets up operating
+		system and site dependent options.  If this is changed
+		you must recompile pascmp.pas and then reload.
+paslnx.pas  -  the scanner itself, sort of equivalent to passcn.mac
+paslny.mac  -  a few MACRO support routines, sort of equivalent to
+		paslnk.mac
+pas.ccl - an indirect file to LINK to load this.  I recommend saving
+		it as PAS.EXE, to save typing.  This command file
+		also assumes that PASUNS.REL is on DSK:.
+
+The compilation process assumes that you have the following .unv files: 
+	Pascal-20:  pasunv.unv [supplied with this distribution]
+	Tops-20	(normally on sys: at all Tops-20 sites): monsym.unv
+
+Two other general packages are used by paslnx.pas.  The .MAC files are
+the source for the package, the .PAS files are designed to be INCLUDE'd.
+  pascmd.mac,pascmd.pas  - a general-purpose comnd jsys interface
+  string.mac,string.pas  - the (unimpressive) beginning of a set of
+	runtimes to do string manipulations on packed array of char.
+	This uses ADJBP, so Tenex people would have to convert them.
+	They are not used in the Tenex version at this time.
+
+Note that the same compiler source and .REL file is used as with the
+compiler describe above (PASCAL.EXE):  only the command scanner is
+changed.  If you say PAS<cr>, you will get a native-mode scanner with
+the same switches as documented in the manual.  However instead of
+REL,LST=SOURCE, it will want just a source file name.  It will produce a
+.REL file by default.  You can suppress the .REL file by /NOBIN, and
+cause a listing file to be created by any listing switch (/LIST, /CREF,
+or /OBJECTLIST).  The scanner rescans the command line, and in this mode
+simulates the EXEC's EXECUTE and DEBUG commands.
+   PAS TEST    		is equivalent to EXEC TEST.PAS
+   PAS TEST/DEBUG	is equivalent to DEBUG TEST.PAS
+   PAS TEST/LOAD	is equivalent to LOAD TEST.PAS
+   PAS TEST/NOLOAD	is equivalent to COMPILE TEST.PAS
+The same conventions about not recompiling if there is already a .REL
+file, etc. are followed.  /COMPILE forces compilation even if the
+dates don't compare.  All normal compiler switches are also allowed.
+The .REL and .LST files, if any, use the same name as the source file
+(truncated to 6 characters if necessary), on the connected directory.
+
+Note that there is a possible confusion about /DEBUG and /NODEBUG.  In
+the normal compiler, we have two orthogonal decisons:
+   debug code compiled?  YES	/DEBUG	(default)
+			 NO	/NODEBUG
+
+   debugger actually used? YES   EXEC DEBUG command
+   			   NO    EXEC EXECUTE command
+
+In this version, since the EXEC is not involved, it is all done with the
+/DEBUG and /NODEBUG switches:
+
+				debugger actually used?
+			      YES			NO
+
+   debug code   YES	/DEBUG			default	
+   compiled?	NO	impossible		/NODEBUG
+
+
+*******EXEC linkage, release 3 and 4********
+
+Note that this entire section is irrelevant for release 5, as
+the proper linkage is built into the distributed EXEC.  However for
+release 5, you will have to make a one-word patch to LINK if you
+want to DEBUG command to load PASDDT.  See the next section.
+
+exec.pat - instructions on how to patch the EXEC to link to PASCALL.  
+		This file assumes that you do not have sources, and
+		thus tells you how to make the patch in FILDDT.  It
+		does not assume very much knowlege of DDT, at least
+		to do the easiest version of the options.
+exec.ddt - the EXEC patches themselves.  See exec.pat first.
+
+The files EXEC.PAT and EXEC.DDT depend upon which release of the EXEC
+you are using.  Here are the currently available versions of the files:
+
+  release       EXEC.PAT         EXEC.DDT
+
+  3 and 3A	EXEC3.PAT	FILDDT.DDT
+  4		EXEC4.PAT	EXEC4.DDT
+
+*******LINK, release 5********
+
+This comment seems to apply only to release 5.  Link version 5.1, which
+is supplied with release 5.1, and with Fortran version 7, appears to
+contain a fix that is equivalent to this patch.
+
+The LINK distributed with release 5 has a problem with respect to
+PASDDT.  This only applies to release 5, since in previous releases, the
+EXEC patch takes care of loading PASDDT.  In release 5, the distributed
+version of LINK understands about PASDDT.  In fact it understands too
+much.  Instead of using the standard code that it uses for most language
+debuggers, it executes some special code for PASCAL that does not do the
+right thing.  Thus what we want to do is simply to disable the calling
+of this special code, so that the normal code is used.  If you make this
+patch in the source, it involves commenting out 4 lines.  If you choose
+to make it using DDT, it involves replacing one instruction with a
+NO-OP.
+
+If you are unwilling to change LINK, you can still use PASDDT.  However
+you will have to load it explicitly.  That is, instead of
+
+  DEBUG PROG.PAS
+
+you would use
+
+  EXECUTE SYS:PASDDT,PROG.PAS
+
+If you take this approach, it might be friendly to rename PASDDT to
+something shorter, or to define a system logical name for it. This
+would allow your users to type something like
+
+  EXECUTE PD:,PROG.PAS
+
+or
+
+  EXECUTE SYS:PD,PROG.PAS
+
+
+ Here is the code that needs to be fixed (in LNKWLD.MAC):
+
+	MOVE	T1,DEBTBL(T1)	;NAME OF DEBUG PROGRAM
+	CAME	T1,['FORDDT']
+	CAMN	T1,['COBDDT']
+	JRST	SPCDDT		;ITS A SPECIAL DDT
+;;	CAMN	T1,['PASDDT']	;[1435] PASCAL IS ALSO SPECIAL
+;;	JRST	[SETOM	PASDFL		;[1435] JUST INDICATE PASDDT SEEN
+;;		SETZM	DEBUGSW		;[1435] PASCAL DOES NOT WANT TO START IN PASDDT
+;;		PJRST	.LOCALS]	;[1435] TURN ON LOAD LOCAL SYMBOLS AND RETURN
+DEBUG1:	MOVEI	T2,F.LEN	;GET A BLOCK OF SPACE FOR FILE SPECS
+
+
+If you build LINK from source, you should just comment out the lines as
+shown above.  If you do not want to rebuild LINK, it is possible to fix
+it using FILDDT.  Here is how.  I assume you have copied LINK.EXE to your
+own directory to work on it.  I have underlined what you type.  <TAB>
+means you type a tab, <CR> means you type a carriage return.  $ is an
+escape, and ^Z is a control-Z.
+
+
+@filddt<CR>
+ ----------
+FILDDT>get link/pat<CR>
+       ----------------
+[5337 symbols loaded from file]
+[Looking at file LINK.EXE.1]
+
+debug1-2/   CAMN 1,.ERRLC+21   	<TAB>
+---------			-----
+.ERRLC+21/   TRNA 3,@444464(3)   $6t;PASDDT <CR>
+				 ----       ----
+debug1-1/   PJRST .ERRLC+22   JFCL<CR> 
+---------                     --------
+^Z
+--
+
+The first two lines, involving DEBUG1-2/ <TAB>  $6t; <CR>, are present
+simply to verify that the code is still the same as I expect it to be.
+The thing to look for is that PASDDT comes out after the $6T.  The
+actual change is made by the DEBUG1-1/ JFCL<CR> ^Z
+
+
+*******runtimes********
+
+The runtime sources are the following.  (Note that pasunv.mac compiles
+into pasunv.unv, which is also needed by the compiler sources.)
+
+passeg.ctl - a control file for building a new version of the sharable
+		runtime system.  It assumes that there is an up to date
+		copy of PASUNS, the conventional library, and creates
+		new versions of PASLIB.REL and PASSEG.EXE.
+debug.pas  - pasddt
+heap.mac   - new and dispose used when DISPOSE is called
+pascmd.mac - COMND jsys support
+pascnv.mac - misc. sixbit conversion, etc.
+pasdat.mac - date/time routines (replaces routines from the Fortran
+		library used in the 10 version, since they use UUO's,
+		and we can't tolerate having the emulator called)
+pasdbg.mac - low-level routines for pasddt (module debsup)
+pasddt.mac - very short file that simply caused PASDDT to be called in
+pasio.mac  - I/O runtimes (modules pasio and danger)
+pascom.mac - variables that need to be in the sharable segment when
+		that is being used
+pasmem.mac - memory allocation routines - also, the Fortran interface
+pasnum.mac - I/O conversion routines
+power.mac - routines for handling exponentiation
+paspsi.mac - interrupt handling routines
+passet.mac - tables used for implementing SET OF CHAR
+passtr.mac - I/O to/from strings
+pasunv.mac - symbols used by all runtimes
+
+There things are all put together with maklib to form a library, which
+you should certainly take (and just replace single modules when you
+recompile).  However pasddt.rel should not be linked into the library.
+Instead it should be put on sys: as pasddt.rel.  Loading it will
+cause things to be set up so that you get a debug.  (Otherwise there is
+no way to control when pasddt gets loaded.) 
+
+In addition, there is a sharable segment, much like FOROTS.  It contains
+all of the runtimes and the debugger.  Normally PASLIB is a very short
+module that simply contains pointers into this segment, and the code
+needed to load it.  Note that the sharable segment cannot be used
+when you are calling Fortran subroutines that do I/O.
+
+Should you not wish to recompile, simply put the following on sys:
+
+paslib.rel - runtime library for Pascal-20, invokes the shared segment
+pasuns.rel - conventional runtime library
+passeg.exe - the shared segment
+psxlib.rel - runtime library for extended addressing programs
+pasddt.rel - pasddt
+
+If you do not want to use the shared segment, you can rename pasuns.rel
+to paslib.rel and forget passeg.exe.
+
+extern.pas should be put somewhere where users can read it.  It
+contains declarations for external procedures not built into the
+compiler (as described in the manual).
+
+*******Details for numerical hackers**********
+
+At the moment, arithmetic errors (divide by zero, overflow, underflow)
+are handled as follows:
+  - if Fortran is present, handled by the Fortran runtimes
+  - otherwise, handled by a simulation of the Fortran runtimes
+
+For those having special need, I have included a file with procedures
+designed to be set up as interrupt handlers for arithmetic exceptions.
+ZEROVR.MAC simply zeros the result and goes on. See the extensive
+comments at the beginning of ZEROVR.MAC for a discussion of the issues
+involved in handling arithmetic error.  In those comments a 5 line macro
+program is given to allow you to test explicitly whether an error has
+happened from the Pascal program, and have the program recover for
+itself.  I strongly recommend that style of operation, rather than
+setting up interrupts.
+
+NB:  ZEROVR currently uses KL instructions (DMOVEx, ADJSP, and ADJBP),
+	so they should be converted if anyone on Tenex wants them.  This
+	is a very easy job, but one that I don't have time for at the
+	moment.
+
+*******Random packages*******
+
+PASCMD is now in the library.  The others are not.  PASPTY uses KL
+opcode, though that should not be a problem, as it is Tops-20
+specific. 
+
+   PASCMD.MAC, PASCMD.PAS - complete support for the COMND jsys.
+	PASCMD.PAS has the declarations in it, and is designed
+	to be INCLUDE'd.  It also has the documentation as comments.
+   PASPTY.MAC - two routines for openning PTY's.  Includes
+	documentation.  Just helps you get and open PTY's.  You
+	still have to do your own timing.
+   FORTIO.MAC - this is an older interface to Fortran.  Documentation
+	is contained in the source.  Use this if you are using
+	a version of Fortran older than version 6 (i.e. a version
+	that is not native mode).  The current version of the Fortran
+	interface is built into the runtimes.  If you load FORTIO
+	explicitly, it will preempt the version that is built in.
+	PASCAL.DOC has a section that describes both interfaces.
+
+PFORM.PAS is a formatter.  It is offered as an alternative to
+CROSS.  The other purpose of cross was to produce a crossreference
+listing.  I believe the the /CREF switch, together with DEC's
+CREF program, do a better job of this.  This formatter is
+from Stanford.  I have not tested it significantly, and make
+not guarantees about it.  When compiling it, you must have
+P: defined as a logical device pointing to some directory on
+which the file PASCMD.PAS is resident.  You should load this with
+PFORMS.MAC, which contains some system-dependent subroutines.
+Currently PFORM is supported on Tenex only if you have PA2050.
+
+PASSRT.MAC is an interface to DEC's SORT/MERGE.  Version 4C of
+SORT is required.  (An interface is also available for version
+4A.)  Docmentation is at the beginning of PASSRT.MAC.
+
+*******Documentation********
+
+The manual is produced using an old version of Brian Reid's SCRIBE 
+system.  This allows automatic production of crossreferences, tables 
+of contents, etc. The files involved are the following:
+
+pascal.mss - the "manuscript" file (i.e. the main source file)
+pascal.aux - table of crossreferences (produced by the previous
+		run of Scribe - should always be kept around for
+		use by future compilations)
+pascal.doc - the final manual
+
+As I mentioned above, the version of SCRIBE we used for this manual 
+is an old one, produced before Brian became as serious about it as he 
+is now.  He has now made it into a serious product, and it is being 
+marketed by Unilogic, Inc. The version included here is far out of 
+date compared to what is currently being distributed, and includes 
+only the one document type and device type needed to make this 
+manual.  If you like what you see, we encourage you to get the real 
+thing from Unilogic:
+  Unilogic, Inc.
+  605 Devonshire St.
+  Pittsburgh, Pa. 15213
+In addition to the program, documentation, reference cards, and a 
+collection of other document types are available.
+
+The files included in this distribution are:
+
+scribe.exe - The scribe program.  Assumes the data base is on DSK:.
+		You would normally have a <scribe> directory, but this
+		one is set up for dsk:.  (It can be changed by
+		depositing 1,,1 in location 140 and starting scribe.)
+file.dev - definitions for the "device" file, i.e. for producing .DOC
+		files.
+crt.tfo - characteristics of the character set assumed available.
+
+An alternate manual is also included.  It does not describe all of
+the more abstruse features, but should be much easier to understand.
+It is designed to be compiled with the current version of Scribe,
+though the version included here can probably be used with some
+small amount of work.  The files are
+   PASCAL-MEM.MSS - source
+   PASCAL-MEM.DOC - the document
+It is intended that this document should be called PASCAL.MEM when
+it is finally put on your system.
+
+Also PAS222.RND and .DOC describe the extended addressing and other
+changes for edit 222 in detail.
+
+*********** extended addressing ***********
+
+The file MONITOR.CHANGES describes the changes you need to make in order
+to use extended addressing with the release 4 monitor. Note that these
+changes are needed only if you compile programs with /EXT or {$X+}.  By
+default, extended addressing is not used, and no monitor changes are
+needed. No changes are needed to use extended addressing with the
+release 5 monitor.
+

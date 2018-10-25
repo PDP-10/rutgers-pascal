@@ -1,0 +1,58 @@
+	title power - ** for pascal
+
+	search monsym,pasunv
+
+	.request sys:forlib.rel
+
+	entry power,ipower,mpower
+	extern exp3.,exp1.,exp2.
+
+power:	push p,15
+	push p,16
+	push p,b
+	push p,c
+	xmovei b,-1(p)
+	push p,b
+	xmovei b,-1(p)
+	push p,b
+	xmovei 16,-1(p)
+	pushj p,exp3.
+	adjstk p,-4
+	pop p,16
+	pop p,15
+	movem t,1(p)
+	popj p,
+
+ipower:	push p,15
+	push p,16
+	push p,b
+	push p,c
+	xmovei b,-1(p)
+	push p,b
+	xmovei b,-1(p)
+	push p,b
+	xmovei 16,-1(p)
+	pushj p,exp1.
+	adjstk p,-4
+	pop p,16
+	pop p,15
+	movem t,1(p)
+	popj p,
+
+mpower:	push p,15
+	push p,16
+	push p,b
+	push p,c
+	xmovei b,-1(p)
+	push p,b
+	xmovei b,-1(p)
+	push p,b
+	xmovei 16,-1(p)
+	pushj p,exp2.
+	adjstk p,-4
+	pop p,16
+	pop p,15
+	movem t,1(p)
+	popj p,
+
+	end

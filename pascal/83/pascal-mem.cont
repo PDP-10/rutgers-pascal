@@ -1,0 +1,75 @@
+@Comment{CONTENTS of PASCAL-MEM.MSS.20 by Scribe 3C(1254) on 15 July 1983 at 04:33}
+@NewPage(0)@Set(Page=1)@Style(PageNumber <@i>)
+@PrefaceSection(Table of Contents)
+@begin(TC1)@rfstr(2)1.@ @$How to compile and execute your program.@end(TC1)
+
+@begin(TC2)@rfstr(2)1.1.@ @$How to use the normal compiler@end(TC2)
+
+@begin(TC2)@rfstr(4)1.2.@ @$Compiler switches@end(TC2)
+
+@begin(TC1)@rfstr(7)2.@ @$PASCAL Debug System (PASDDT)@end(TC1)
+
+@begin(TC2)@rfstr(7)2.1.@ @$How PASDDT works@end(TC2)
+
+@begin(TC2)@rfstr(8)2.2.@ @$Commands for controlling your program@end(TC2)
+
+@begin(TC2)@rfstr(10)2.3.@ @$Single step mode@end(TC2)
+
+@begin(TC2)@rfstr(11)2.4.@ @$Commands for looking at and changing variables@end(TC2)
+
+@begin(TC2)@rfstr(12)2.5.@ @$Looking around in the source file@end(TC2)
+
+@begin(TC2)@rfstr(12)2.6.@ @$FIND 'string'@end(TC2)
+
+@begin(TC2)@rfstr(12)2.7.@ @$A warning about confusing PASDDT@end(TC2)
+
+@begin(TC1)@rfstr(14)3.@ @$Basic Input/Output@end(TC1)
+
+@begin(TC2)@rfstr(14)3.1.@ @$Standard Files@end(TC2)
+
+@begin(TC2)@rfstr(15)3.2.@ @$Other ways of specifying a file name@end(TC2)
+
+@begin(TC2)@rfstr(16)3.3.@ @$Details about terminal I/O@end(TC2)
+
+@begin(TC2)@rfstr(17)3.4.@ @$Reading characters@end(TC2)
+
+@begin(TC3)@rfstr(17)3.4.1.@ @$Turning end of lines into blanks@end(TC3)
+
+@begin(TC3)@rfstr(18)3.4.2.@ @$Reading strings@end(TC3)
+
+@begin(TC1)@rfstr(20)4.@ @$Additional Input/Output Facilities@end(TC1)
+
+@begin(TC2)@rfstr(20)4.1.@ @$Extra options in file I/O@end(TC2)
+
+@begin(TC3)@rfstr(22)4.1.1.@ @$Labelled tapes@end(TC3)
+
+@begin(TC3)@rfstr(24)4.1.2.@ @$I/O Error processing @end(TC3)
+
+@begin(TC2)@rfstr(25)4.2.@ @$CLOSE@end(TC2)
+
+@begin(TC2)@rfstr(25)4.3.@ @$RENAME@end(TC2)
+
+@begin(TC2)@rfstr(26)4.4.@ @$DELETE @end(TC2)
+
+@begin(TC2)@rfstr(26)4.5.@ @$UPDATE@end(TC2)
+
+@begin(TC2)@rfstr(26)4.6.@ @$Random access@end(TC2)
+
+@begin(TC2)@rfstr(28)4.7.@ @$I/O to strings@end(TC2)
+
+@begin(TC1)@rfstr(30)5.@ @$Extensions to Pascal Syntax@end(TC1)
+
+@begin(TC2)@rfstr(30)5.1.@ @$Extended CASE Statement@end(TC2)
+
+@begin(TC2)@rfstr(30)5.2.@ @$LOOP Statement@end(TC2)
+
+@begin(TC1)@rfstr(31)6.@ @$Standard Procedures and Functions@end(TC1)
+
+@begin(TC1)@rfstr(34)7.@ @$Things to look out for@end(TC1)
+
+@begin(TC2)@rfstr(34)7.1.@ @$Errors that this compiler won't tell you about@end(TC2)
+
+@begin(TC2)@rfstr(35)7.2.@ @$Extensions@end(TC2)
+
+@begin(TC1)@rfstr(38)Index@end(TC1)
+

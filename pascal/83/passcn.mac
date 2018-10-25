@@ -1,0 +1,418 @@
+title PASREL - module for reading command string for pasrel.
+
+	search pasunv, macsym
+	sall
+	.direc	sfcond
+	.direc	flblst
+
+;note - this routine MUST ALWAYS run in section 0, since it
+;will call SCAN which will call PA1050, which wont run in a non-zero
+;section.  Just to be sure, we will test for a non-zero section and
+;die if we are not in section 0 to start with.
+
+ifndef tops20,<tops20==1>
+ife tops20,<if1,<printx TOPS-10 version>>
+ifn tops20,<if1,<printx TOPS-20 version>>
+ifn tenex,<if1,<printx for Tenex>>
+
+;edit history
+
+;2 - detect too many file spec's in command
+;3 - Tenex
+;4 - make START work after exit from SCAN
+;5 - non-Sumex Tenex code
+;6 - better default names
+
+	search c,scnmac
+	extern .swcor
+	intern oldbfh
+	twoseg
+t1=1
+t2=2
+t3=3
+t4=4
+t5=5
+p=17
+filbfh==26
+pdlen==100
+lookl==6	;length of lookup block in inblk, etc.
+openl==3	; " open
+pathl==9	; " path
+	reloc 0
+oldbfh:	0	;save buffer header for alt file input here
+PSAV:	0	;SAVE PDL HERE FOR RETURN AFTER COMPILE
+SASAV:	0	;SAVE .JBSA HERE FOR RETURN AFTER COMPILE
+STADR:	0
+runnam:	sixbit /pascal/	;defaults for tops-20
+runppn:	0
+rundev:	sixbit /dsk/
+out:	0	;pointer to scan block for output
+rel:	0	;pointer to scan block for rel file
+in:	0	;pointer to scan block for input file
+nxtblk:	0	;place next scan block will begin
+outblk::block lookl+openl+pathl	;lookup+open+path block for output
+relblk::block lookl+openl+pathl	;lookup+open+path block for rel
+inblk::block lookl+openl+pathl	;lookup+open+path block for input
+	;THE FOLLOWING BLOCK OF STUFF WILL GET RETURNED TO PASCMP, AND
+	;WILL BE INTERPRETED BY IT AS A RECORD OF TYPE RPGDATA.  THUS
+	;ITS STRUCTURE MUST MATCH THAT DECLARED IN PASCMP.PAS.
+relnam::byte (7)40,40,40,40,40
+	byte (7)40,40,40,40,40
+stkval:	block 1	;value for stack
+heaval:	block 1	;value for heap
+verval:	block 1	;value for version
+RPGSW:	0	;NOTE THAT THEY ARE IN REVERSE ORDER FROM THE STRUCTURE
+		;DECLARATION FOR RPGDATA.  THATs BECAUSE PASCAL REVERSES
+		;THINGS IN PROCESSING MULTIPLE DECLARATIONS.
+CRSW:	0	;CREF SWITCH
+DSW:	0
+CSW:	0
+MSW:	0
+TSW:	0
+LSW:	0
+zsw:	0
+asw:	0
+xsw:	0	;EXTEND switch
+
+relfcb::0	;addr of file ctl block for rel file
+
+ife tops20,<
+DOCAL:		;HERE TO CALL ANOTHER SEGMENT. ITS NAME IN T2, STADR IN T3
+	move t1,rundev	;use place we were called from
+	movem t1,cmpblk
+	move t1,runppn
+	movem t1,cmpblk+3
+	movei t1,cmpblk
+	MOVEM T2,CMPBLK+1	;NAME OF SEGMENT TO BE CALLED
+	MOVEM T3,STADR
+	getseg t1,
+	  halt .
+	JRST @STADR	;GO TO STARTING ADDRESS
+> ;ife tops20
+ifn tops20,<
+docal:	jsys 147	;reset - prevent ill mem ref
+	jrst (t3)
+> ;ifn tops20
+
+cmpblk:	sixbit /sys/
+	sixbit /pascmp/
+	exp 0,0,0,0
+
+calcmp:	skipe t2,relfcb		;addr of file ctl. block for rel file
+	setzm filbfh(t2)	;say we are throwing away its buffers
+	movei t2,input##	;ditto source file
+	setzm filbfh(t2)
+	setzm oldbfh		;and the alternate
+	movei t2,output##	;ditto listing file
+	setzm filbfh(t2)
+	move t2,runnam		;thing to be called
+	hrri t2,'CMP'		;make it compiler
+	MOVEI T3,PASCMP##	;STARTING ADDR
+	JRST DOCAL	;AND DO IT
+
+	setzm rpgsw	;entry point after SCAN has done SOS .JBSA at exit
+CALSCN::		;HERE TO RETURN TO SCAN
+	move t2,runnam
+	MOVEI T3,PASRST
+	JRST @[0,,DOCAL]	;get into section 0
+PRLNAM:	SIXBIT /PASCAL/
+
+	RELOC 400000
+
+PASRST:	MOVE P,PSAV	;RESTORE STUFF FROM LAST TIME
+	MOVE T1,SASAV
+	MOVEM T1,.JBSA##
+	RESET
+	MOVEI T1,PDLEN
+	ADDB T1,.JBFF##
+	addi t1,3*.fxlen ;t1 _ max .JBFF we will need
+	CAMG T1,.JBREL##
+	JRST PASSCN	;core is there, go ahead
+	CORE T1,
+	  JRST [outstr [asciz /
+? PASNCO No core for stack/]
+		exit]
+	JRST PASSCN	;ONLY VALID THING IS /RUN OR /EXIT ON RESTART
+
+start:	tdza t1,t1	;normal entry
+	movei t1,1	;rpg entry
+ife tops20,<
+	movem .sgnam,runnam	;save entry parameters
+	movem .sgppn,runppn
+	movem .sgdev,rundev
+> ;ife tops20
+	movem t1,rpgsw	;save status of rpg entry
+	xmovei	t1,.		;get current section #
+	tlne	t1,-1		;is section non-zero
+	 jrst	[outstr	[asciz/
+?This code CANNOT be started in a non-zero section/]
+		exit]
+	RESET
+	HRLI P,-PDLEN	;SET UP PDL PTR AT .JBFF
+	HRR P,.JBFF##
+	MOVEM P,PSAV	;FOR USE IN RESTART
+	movei t1,calscn	;address for restarting
+	hrrm t1,.jbsa##	;in case of ^C-start
+	MOVE T1,.JBSA##
+	MOVEM T1,SASAV	;FOR USE IN RESTART
+	MOVEI T1,PDLEN
+	ADDB T1,.JBFF##
+	addi t1,3*.fxlen ;t1 _ max .JBFF we will need
+	CAMG T1,.JBREL##
+	JRST PASSC1	;core is there, go ahead
+	CORE T1,
+	  JRST [outstr [asciz /
+? PASNCO No core for stack/]
+		exit]
+passc1:
+; here would go routines getting current time
+	move t1,.isblk
+	pushj p,.iscan##	;initialize scan
+PASSCN:	move t1,.tsblk
+	pushj p,.tscan##	;call scan to read command line
+	move t1,.osblk
+	pushj p,.oscan##	;call scan to read SWITCH.INI
+	pushj p,deffil		;set up NUL: if no output spec
+	move t1,out		;convert file spec for pascal
+	movei t3,outblk
+	pushj p,cnvfil
+	move t1,rel		;rel file
+	movei t3,relblk
+	pushj p,cnvfil
+	move t1,in
+	movei t3,inblk
+	pushj p,cnvfil
+	move t1,relblk+.rbnam
+	CAIN T1,0		;IF NO REL FILE NAME
+	MOVE T1,INBLK+.RBNAM	;USE INPUT FILE NAME
+	CAIN T1,0		;IF NONE THERE EITHER
+	MOVE T1,OUTBLK+.RBNAM	;USE LISTING NAME
+	CAIN T1,0		;IF NONE THERE EITHER
+	MOVE T1,[SIXBIT /.MAIN/];THEN USE DEFAULT
+	move t2,[point 7,relnam]	;put it here
+	movei t3,6		;6 chars
+	pushj p,sixasc
+	move t3,[-1]
+	move t1,rel
+	move t2,.fxver(t1)	;version spec for output?
+	move t1,in
+	camn t2,t3
+	move t2,.fxver(t1)	;no - use input's
+	move t1,out
+	camn t2,t3
+	move t2,.fxver(t1)	;none there either - try this
+	camn t2,t3
+	movei t2,0
+	movem t2,verval
+	jrst calcmp		;call compiler
+
+.isblk:	3,,.+1
+	0
+	rpgsw,,'pas'
+	0
+
+.tsblk:	9,,.+1
+	iowd passwl,passwn
+	passwd,,passwm
+	0,,passwp
+	-1
+	clrans,,.clsns##
+	allin,,allout
+	0
+	0,,fs.mot
+	0
+
+.osblk:	4,,.tsblk+1
+
+dm stk,0,0,0
+dm hea,0,0,0
+define swtchs<
+	sn *objectlist,lsw,fs.nue
+	sn *main,msw,fs.nue
+	SN *CREF,CRSW,FS.NUE
+	sn check,csw,fs.nue
+	sn *arithcheck,asw,fs.nue
+	sn *debug,dsw,fs.nue
+	sn extend,xsw,fs.nue
+	sn zero,zsw,fs.nue
+	sp stack,stkval,.swcor,stk,fs.nue!fs.vrq!fs.lrg
+	sp heap,heaval,.swcor,hea,fs.nue!fs.vrq!fs.lrg
+	>
+
+doscan(passw)
+
+deffil:		;here we set unused output spec's to NUL:
+	SKIPN t1,out	;output area generated?
+	pushj p,allout	;no - do so
+	skipe .fxdev(t1)	;device specified?
+	jrst outsp	;yes - OK
+ife tenex,< ;[5]
+	hrlzi t2,(sixbit /nul/)	;no - use NUL
+> ;[5] ife tenex
+ifn tenex,< ;[5]
+	hrlzi t2,(sixbit /nil/) ;[5] no - use NIL
+> ;[5] ifn tenex
+	movem t2,.fxdev(t1)
+outsp:	SKIPN t1,rel	;rel file area generated?
+	pushj p,allout	;no - do so
+	skipe .fxdev(t1)
+	JRST .+3
+ife tenex,<;[5]
+	hrlzi t2,(sixbit /nul/)
+> ;[5] ife tenex
+ifn tenex,< ;[5]
+	hrlzi t2,(sixbit /nil/) ;[5]
+> ;[5] ifn tenex
+	movem t2,.fxdev(t1)
+	MOVE T1,IN	;PREPARE TO DEFAULT FILE NAME
+	MOVE T2,OUT
+	MOVE T3,REL
+	MOVE T4,['PAS',,777777]
+	SKIPN .FXEXT(T1)
+	MOVEM T4,.FXEXT(T1)
+	SKIPE .FXNAM(T1)
+	jrst havinm	;[6] use old name
+;[6] try various possible sources for an input file name
+	move t4,.fxnam(t3) ;[6] name from rel file
+	jumpn t4,newinm	;[6]
+	move t4,.fxnam(t2) ;[6] name from listing file
+	jumpn t4,newinm ;[6]
+	move t4,[sixbit /PASCAL/] ;[6] in desparation: pascal
+newinm:	movem t4,.fxnam(t1)
+	setom .fxnmm(t1)
+HAVINM:	MOVE T4,['LST',,777777]
+	SKIPLE CRSW	;IF CREF SET, DIFFERENT DEFAULT
+	MOVE T4,['CRF',,777777]
+	SKIPN .FXEXT(T2)
+	MOVEM T4,.FXEXT(T2)
+	move t4,.fxnam(t1) ;[6] default will be input name
+	skipe .fxnam(t2)
+	jrst .+3
+	movem t4,.fxnam(t2)
+	setom .fxnmm(t2)
+	MOVE T4,['REL',,777777]
+	SKIPN .FXEXT(T3)
+	MOVEM T4,.FXEXT(T3)
+	move t4,.fxnam(t1) ;[6] default will be input name
+	skipe .fxnam(t3)
+	jrst .+3
+	movem t4,.fxnam(t3)
+	setom .fxnmm(t3)
+	MOVEI T2,1	;SET UP DEFAULT SWITCHES - THIS IS YES
+	SETO T1,	;THIS IS NO ANSWER YET
+	CAMN T1,LSW	;ANSWER GIVEN?
+	SETZM LSW	;NO - GIVE DEFAULT
+	camn t1,xsw
+	setzm xsw
+	camn t1,zsw
+	setzm zsw
+	CAMN T1,TSW
+	MOVEM T2,TSW
+	CAMN T1,MSW
+	MOVEM T2,MSW
+	CAMN T1,CSW
+	MOVEM T2,CSW
+	CAMN T1,DSW
+	movem t2,dsw
+	CAMN T1,CRSW
+	SETZM CRSW
+	move t4,csw		;look at /ARITH value - csw is default
+	camn t1,asw		;if still not set
+	movem t4,asw		;then use default
+	skipl	t4,stkval	;look at /stack value
+	camn	t4,t1		;default?
+	 clear	t4,		;yes, use 0
+	caig	t4,sn%max	;if zero or default or near zero
+	 jrst	stkok		;then take value given
+	trnn t4,777		;on even page?
+	subi t4,1		;he really wants boundary
+	tro t4,777		;put us on boundary
+stkok:	movem t4,stkval
+	move t4,heaval		;look at /heap value
+	caie t4,0		;if zero or default
+	camn t4,t1
+	jrst [setzm heaval	;then use zero
+	      jrst .+5]
+	trnn t4,777		;on even page?
+	subi t4,1		;he wants this
+	tro t4,777		;otherwise round up
+	movem t4,heaval
+	popj p,
+
+clrans:		;here to initialize defaults
+	move t1,.jbff##
+	movem t1,nxtblk
+	addi t1,3*.fxlen	;this is what we are going to use
+	movem t1,.jbff##
+	SETZM out
+	setzm rel
+	setzm in
+	SETOM lsw
+	setom xsw
+	setom zsw
+	SETOM dsw
+	SETOM TSW
+	SETOM  MSW
+	SETOM CSW
+	setom asw
+	SETOM CRSW
+	setom stkval
+	setom heaval
+	popj p,
+
+allin:	move t1,nxtblk	;routine to allocate space for input scan blk
+	pushj p,clrblk
+	MOVE T2,T1
+	ADDI T2,.FXLEN
+	MOVEM T2,NXTBLK
+	movei t2,.fxlen	;length of block
+	skipe in	;[2] be sure this is the first time
+	jrst [outstr [asciz /
+? PASMOI More than one input file is illegal/] ;[2] if more than one
+	      exit]	;[2] it is fatal error
+	MOVEM T1,IN
+	popj p,
+
+clrblk:	setzm (t1)
+	hrl t2,t1
+	hrri t2,1(t1)
+	blt t2,.fxlen(t1)
+	popj p,
+
+allout:	move t1,nxtblk
+	pushj p,clrblk
+	move t2,t1
+	addi t2,.fxlen	;compute address of next scan blk
+	movem t2,nxtblk
+	movei t2,.fxlen	;length of block
+	skipe REL	;if REL not done
+	jrst .+3
+	movem t1,REL	;this must be it
+	popj p,
+	skipe out	;[2] if OUT already done
+	jrst [outstr [asciz /
+? PASMTO More than two output files is illegal/] ;[2] 
+	      exit]	;[2] it is fatal error
+	MOVEM T1,OUT
+	popj p,
+
+cnvfil:		;this routine converts a scan block to lookup
+		;and open blocks, and then to pascal's format
+			;addr of lookup block in t3
+	movei t2,lookl(t3)	;open block
+	movei t4,openl(t2)	;path block
+	pushj p,.stopb##	;converts block whose addr is in t1
+	  jfcl		;in case has question marks in it, etc.
+	popj p,
+sixasc:		;routine to convert to ascii
+	; t1 - sixbit thing
+	; t2 - pointer to where first char goes
+	; t3 - how many char's to do
+	rot t1,6	;get next char
+	ldb t4,[point 6,t1,35]	;get char only
+	addi t4,40	;convert to ascii
+	idpb t4,t2	;put it away
+	sojg t3,sixasc	;and go on if need to
+	popj p,
+
+	end start

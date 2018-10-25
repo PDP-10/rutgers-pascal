@@ -1,0 +1,196 @@
+	title PASPTY - routine for openning a PTY in Pascal-20
+
+	twoseg
+
+	search monsym,pasunv
+
+i==11
+
+	reloc 400000
+
+	entry ptyopn,ptyget
+
+;ptyopn(input,output,name,openf bits,flags)
+;  This routine is designed to solve a problem in the design of
+;	the pascal language:  Because buffer variables are
+;	associated with a pascal file, you cannot do input and
+;	output over the same file.  When you did output, you
+;	would lose what was left in the buffer from the last
+;	input.  This is important because Pascal uses one-
+;	character lookahead.  So this routine opens two files
+;	with the same jfn, one for input and the
+;	other for output.  Openf bits and flags are the
+;	last two arguments from a standard RESET or REWRITE.
+;	They should usually be zero.  The bit is automatically
+;	set that suppresses the implicit GET after the open.
+;	The following example program shows how to use it.
+;	However any realistic program would have to handle
+;	synchronization, probably by using interrupts
+;   You should check EOF(input) to see if it worked.  If a null name is
+;	given, the current jfn from input will be used.
+
+repeat 0,<
+
+procedure ptyopn(var i:file;var out:file; name:string; open,buffer:integer); extern;
+function ptyget(var i:file):integer;extern;
+
+begin
+{If this program must be restartable, a short wait should be put here.
+  It takes some time for the close of the pty: to take effect after
+  the reset is done at the beginning of the program.  If we proceed
+  to try and reopen the pty before that time, we get 'already in use
+  by another job'.  It works the first time, however.}
+
+if ptyget(input) = 0
+  then writeln(tty,'error');
+ptyopn(input,output,'',0,20B);
+write(output,chr(3));	{control C to give the greeting}
+repeat
+  get(input);
+  ttyoutput^ := input^;
+  put(ttyoutput);
+  until input^ = '@';
+writeln(output,'systat');  {We must wait for the prompt before this. }
+repeat
+  get(input);
+  ttyoutput^ := input^;
+  put(ttyoutput)
+  until false
+end.
+>
+
+ptyopn:	push p,c	;output file
+	push p,d	;name
+	push p,e
+	push p,f	;openf bits
+	push p,g	;flags
+;first make sure the file control blocks have been initialized
+	move t,filtst(b)
+	caie t,314157		;magic word will be there if it is legal
+	pushj p,initb.##	;not - init it
+	exch b,c
+	move t,filtst(b)
+	caie t,314157		;magic word will be there if it is legal
+	pushj p,initb.##	;not - init it
+	exch b,c
+;since we are going to copy the jfn from the input to the output, we had
+;  better release any existing output jfn, unless it happens to be the
+;  same as the input jfn.  In that case, need to be able to close input,
+;  too, so we just close it rather than releasing it.
+	hrrz t,filjfn(c) ;get output jfn
+	jumpe t,noojfn	;if none, nothing to do
+	hrrz a,filjfn(b) ;get input jfn
+	xmovei i,relcl.##;assume we are going to release the file
+	camn a,t	;if they are the same
+	xmovei i,clofil## ;just close it
+	setz c,		;clofil needs this zero
+	exch b,-4(p)	;get output file, save input
+	pushj p,(i)	;close/release it
+	exch b,-4(p)	;now back to input
+;now we take care of the input jfn.  We want to release it unless we are
+;  to reuse it, in which case we just close it.
+noojfn:	hrrz t,filjfn(b) ;get input jfn
+	jumpe t,noijfn	;if none, nothin to do
+	xmovei i,relcl.##;assume we are going to release it
+	cain e,0	;except that is null file name, only close it
+	xmovei i,clofil##
+	setz c,
+	pushj p,(i)	;close/release it
+;now we have to copy the input jfn to the output.  The output has to be
+;  openned first, since the final openf must be in update mode (to allow
+;  both directions), and obviously the input most be the one shown as update
+	move t,filjfn(b) ;get input jfn again.  (now zero if released)
+noijfn:	exch b,-4(p)	;now swap jfn's back to output
+	movem t,filjfn(b) ;put jfn in output
+;first open output
+nojfn:	move c,d	;c,d _ name
+	move d,e
+	move h,g	;h _ flags
+	move g,f	;g _ openf bits
+	setzb e,f	;no gtjfn bits or interactive mode
+	setz a,		;text file
+	pushj p,rewrite## ;open output side
+	skipn fileof(b)	;if error
+	jrst [adjsp p,-4 ;prune stack
+	      pop p,b	;get input file
+	      movei t,1	;put error indicator in input
+	      movem t,fileof(b)
+	      jrst return]
+;now open input
+	pop p,h		;h _ flags
+	pop p,g		;g _ openf bits
+	setz f,		;no gtjfn bits
+	seto e,		;interactive
+	pop p,d		;c,d _ name
+	pop p,c
+	setz d,		;but ignore these (using existing jfn from output)
+	move t,filjfn(b) ;t _ new jfn
+	pop p,b		;b _ input file
+	movem t,filjfn(b) ;now put new jfn into input file
+	setz a,		;text file
+	pushj p,update## ;finally open input (update so it is read/write)
+return:	pop p,a		;return address
+	adjsp p,-1	;last arg was also pushed
+	jrst (a)
+
+
+;ptyget(file):integer
+;  Tries to get a free pty.  If so, puts the jfn in file and returns
+;	a tty designator for the corresponding tty.  If none avaiable,
+;	returns zero.
+
+ptyget:	move t,filtst(b)
+	caie t,314157		;magic word will be there if it is legal
+	pushj p,initb.##	;not - init it
+	move e,b		;save file in e
+	pushj p,relcl.##	;close any old file
+	MOVE A,[SIXBIT/PTYPAR/]	;GET # OF PTYS IN SYSTEM
+	SYSGT			;...
+	HRRZM A,FIRPTY#		;STORE TTY CORRESPONDENCE FOR PTY'S
+	HLRZM A,NUMPTY#		;STORE # OF PTY'S IN SYSTEM
+	MOVN D,NUMPTY#		;GET # OF PTYS IN SYSTEM
+	HRLZS D
+	adjsp p,3		;get space for the file name
+GETPT1:	MOVSI A,600013		;GET PTY DESIGNATOR
+	HRRI A,(D)		;TRY TO GET NEXT PTY
+	DVCHR			;GET CHARACTERISTICS OF THIS PTY
+	TLNN B,(1B5)		;IS IT AVAILABLE?
+	  JRST GETPT2			;NO
+	MOVE B,A
+ifn klcpu,<
+	xmovei bix,-2(p)
+	move a,[point 7,(bix)]
+> ;ifn klcpu
+ife klcpu,<
+	movei a,-2(p)
+	hlri a,(point 7,)
+> ;ife klcpu
+	DEVST
+	  jrst getpt2
+	MOVEI B,":"		;TERMINATED BY A COLON
+	IDPB B,A
+	MOVEI B,0
+	IDPB B,A		;ENDED WITH A 0 BYTE
+	MOVSI A,1		;SHORT FORM GTJFN
+ifn klcpu,<
+	move b,[point 7,(bix)]
+> ;ifn klcpu
+ife klcpu,<
+	hrr b,-2(p)
+	hrli b,(point 7,)
+> ;ife klcpu
+	GTJFN
+	  JRST GETPT2			;NOT AVAILABLE
+	adjsp p,-3		;success - restore stack
+	ADD D,FIRPTY		;TRUN PTY UNIT # INTO TTY #
+	TRO D,(1B0)		;MAKE LEGAL TERMINAL DESIGNATOR
+	hrrzm d,1(p)		;STORE TTY DESIGNATOR
+	movem a,filjfn(e)	;STORE JFN ALSO
+	POPJ P,
+
+GETPT2:	AOBJN D,GETPT1		;TRY FOR ANOTHER PTY
+	adjsp p,-3		;none left - restore stack
+	setzm 1(p)		;say we failed
+	POPJ P,			;NONE LEFT
+
+	end

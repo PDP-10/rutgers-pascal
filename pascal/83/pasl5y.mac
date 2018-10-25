@@ -1,0 +1,372 @@
+	title PASL5Y - macro support routines for release 5 version of PASLNK
+
+	twoseg
+
+	search monsym,pasunv
+
+	extern resetf,clofil,quit,%cclsw,pascmp
+	entry pushf,popf,runlink,clribf,curnam,getrpg,prget,ctpcom,idcomp
+	extern	init.b
+
+ltext=2000	;make sure we have at least a full page
+
+	reloc 0
+oldf:	block filcmp+1
+oldfen=.-1
+state:	block 1		;address of state block
+tmpcnt:	block 1
+text:	block ltext
+txtbp:	block 1
+txtcnt:	block 1
+tmpjfn:	block 1		;non-zero if using a .TMP file
+tmppag:	block 1
+
+	reloc 400000
+
+;B - the command state block
+prget:	movem b,state
+;Note: we want to use the COMND jsys, but we do not always have
+; a file to scan, since the argument may be in a PRARG block.
+; Thus we put the text to be scanned where the COMND jsys would
+; have put it had you typed it in, and then simulate a reparse.
+;Note that COMND suppresses <cr>'s.  So we must purge them.
+
+;First get the commands from the EXEC
+	skipe tmpcnt		;already got EXEC's commands?
+	jrst nxtlin		;yes - just get next one
+	aos tmpcnt		;say we have it now (or die trying)
+;Here we try to read a prarg block into TEXT and process it
+	move a,[.prard,,.fhslf]	;a/ function,,process handle
+	hrrzi b,text		;b/ address of block
+	hrrzi c,ltext		;c/ length of block
+	prarg			;get program argument block
+	erjmp [hrroi a,[asciz /PRARG to get command from EXEC failed/]
+	       jrst prerr]
+	caile c,ltext		;if block too long for text area
+	 jrst [hrroi a,[asciz /PRARG block too long for internal buffer/]
+	       jrst prerr]
+	jumpe c,trytmp		;if nothing there, try .TMP file
+	movn c,text		;minus number of lists to check
+	hrlzi c,(c)		;set up aobjn counter 
+	aos c			; with 1 as first offset
+finnpo:	move b,text(c)		;get offset of next list
+	hlrz a,text(b)		;get list name
+	cain a,'NPO'		;is it my list?
+	jrst founpo		;yes, go parse command
+	aobjn c,finnpo		;no, check out next list
+	jrst trytmp		;didn't find it, try for .TMP file
+
+;Here when we get the command in TEXT.  B is an offset into TEXT,
+;actually into TEXT+1 (i.e. B must be -1 to get TEXT).
+founpo:	move a,[point 7,text]	;here's where we'll put the commands
+	movei b,text+1(b) 	;this is the string with the commands
+	hrli b,440700
+	movem b,txtbp
+
+;Here for each new line.  Uses TXTBP for pointer into TEXT
+nxtlin:	skipe tmpjfn		;if using .TMP file
+	jrst settmp		;set up state block for it
+
+;Here we copy the string, purging <cr>'s.  This is because we are
+; simulating the COMND jsys's having set up the buffer by a previous
+; input and now doing a rescan.  COMND sets the flag to purge <cr>'s,
+; and in fact demonstrably cannot handle <cr>'s in the buffer in
+; certain cases.
+	move a,state		;get state block
+	movn c,.cmcnt(a)	;space in buffer
+	hrlz c,c		;to LH
+	move a,.cmbfp(a)	;and buffer pointed to there
+nxtlop:	ildb d,txtbp		;get one
+	cain d,15		;if <cr>
+	jrst nxtlop		;ignore it
+	idpb d,a
+	cain d,12		;if <LF>
+	jrst nxtdon		;end of this line
+	jumpe d,nxtxxx		;null - absolute end
+	aobjn c,nxtlop		;loop if still room for null
+	hrroi a,[asciz \Command string too big for COMND buffer\]
+prerr:	esout
+nxtxxx:	haltf
+	jrst .-1
+
+;Now we have the commad string in text buffer - set up for COMND to read it
+nxtdon:	setz d,			;make asciz
+	idpb d,a
+	addi c,1		;count the LF
+	hrrz a,c		;RH of aobjn is count of char's, not
+				; including the null
+	move b,state
+	movem a,.cminc(b)	;this is how many we have
+	move a,[.nulio,,.nulio]	;suppress prompt for ccl mode
+	movem a,.cmioj(b) 	; save jfns here
+	movei a,nxtxxx		;where to go on reparse
+	movem a,.cmflg(b) 	; save output jfn here
+	move a,[point 7,[0]]
+	movem a,.cmrty(b)
+	popj p,
+
+;Here to read from .TMP file
+;make up file name in TEXT
+trytmp:	gjinf			;no info in prarg, try .tmp file
+				;build filename in core
+	move a,[point 7,text,-1] ;a/ destination designator
+	move b,c		;b/ number to be output (job number)
+	movei c,^d10		;c/ radix in right half
+	hrli c,<(no%lfl+no%zro)>+3 ;  flags (leading fill 0's) and number
+				; of digits
+	nout			;output the number
+	erjmp [hrroi a,[asciz /NOUT failed - "impossible"/]
+		jrst prerr]
+	hrroi b,[asciz \NPO.TMP\] ;b/ pointer to string
+	setz c,			;c/ number of bytes or zero
+	sout			;append that string
+;open the file
+	hrlzi a,(gj%old+gj%sht)	;a/ flags (old file, short gtjfn)
+	move b,[point 7,text,-1] ;b/ source designator
+	gtjfn			;get jfn on file
+	erjmp [	hrroi a,[asciz \Can't GTJFN .TMP file\] ;load up error msg
+		jrst prerr]
+	movei b,of%rd		;b/ flags in right half (read access)
+	hrli b,070000		;b/ byte size in left half (bits 0-5)
+	openf			;open the file
+	erjmp [	hrroi a,[asciz \Can't OPENF .TMP file\] ;error msg
+		jrst prerr]
+;now we are going to PMAP page 0 of the file, so the RESET's done by
+;PASCMP don't kill it.
+	movem a,tmpjfn		;save JFN for later
+	movei b,text		;now find us a page to PMAP to
+	lsh b,^D-9		;turn into a page number
+	addi b,1		;and go to next page boundary
+	movem b,tmppag		;save page number for later
+	hrlz a,a		;JFN,,file page 0
+	hrli b,.fhslf		;us,,text page
+	movsi c,(pm%rd)		;map for reading
+	pmap
+
+;here after each CMINI - set up state block to point to the .TMP file
+settmp:	move a,tmpjfn		;see if anything there - if not, done
+	bin
+	erjmp tmpdon		;at end of file - done
+	jumpe b,settmp		;skip nulls
+	bkjfn			;skip over the thing we just saw
+	erjmp [hrroi a,[asciz /Couldn't back over char in .TMP file/]
+		jrst prerr]
+	hrl a,tmpjfn		;make up JFN,,NULIO for CMIOJ
+	hrri a,.nulio
+	move b,state
+	movem a,.cmioj(b) 	; save jfns here
+	popj p,
+
+;here when done with .TMP file - have to unmap it so it will close
+tmpdon:	pushj p,tmpkil		;kill temp file
+	haltf			;and exit
+	jrst .-1		;permanently
+
+;routine to kill .TMP file
+tmpkil:	push p,b
+	push p,c
+	seto a,			;unmap mapped page
+	move b,tmppag
+	hrli b,.fhslf
+	setz c,
+	pmap
+	move a,tmpjfn		;close is needed before delete
+	hrli a,(co%nrj!cz%nud)	;keep our finger on it
+	closf
+	erjmp tmpk2		;not much we can do if won't close
+	move a,tmpjfn		;now delete
+	hrli a,(df%exp)		;,expunge
+	delf
+	erjmp .+1		;ignoring errors
+tmpk2:	pop p,c
+	pop p,b
+	popj p,
+
+pushf:	hrl a,b			;copy old fcb
+	hrri a,oldf
+	blt a,oldfen
+	pushj p,init.b		;reinit the fcb
+	setz a,			;text file
+	seto e,			;[2] so we can see errors
+	setzb f,g		;[2]
+	movei h,30		;[2] let us see open errors and EOL char
+	pushj p,resetf
+	popj p,
+
+popf:	push p,b
+	setz c,
+	pushj p,clofil
+	pop p,b
+	hrli a,oldf
+	hrr a,b
+	blt a,filcmp(b)
+	popj p,
+
+clribf:	movei a,.priin
+	cfibf
+	popj p,
+
+getrpg:	move b,%cclsw
+	movem b,1(p)
+	popj p,
+
+;B - Pascal file containing JFN for program to run.  Must not be
+;	open
+;C - offset
+runlin:	skipe	tmpjfn		;if temporary file
+	pushj	p,tmpkil	;kill it
+	hrrz	17,filjfn(b)	;where to put jfn
+	hrr	16,c		;and offset
+	hrli	16,(<jrst (b)>)	;as offset of JRST
+	movei	a,.fhslf	;clear SWTRP if any from this fork
+	movei	b,.swart	;  set function
+	movei	c,0		;  0 means clear it
+	swtrp%
+	 erjmp	.+1		;not impl?
+	seto	a,		;remove pages
+	MOVSI	B,.FHSLF	; FREOM THIS FORK
+	MOVE	C,[PM%CNT+1000]	; ALL 1000 PAGES
+	MOVE	D,[RUNCOD,,10]	;MOVE REST OF CODE TO
+	BLT	D,15		; ACS 10-16
+	JRST	10		;DO IT THERE
+RUNCOD:	PMAP			;10 DELETE ALL PAGES FROM MAP
+	MOVSI	A,.FHSLF	;11 GET INTO THIS FORK
+	HRR	A,17		;12 FROM THIS FILE
+	GET			;13 GO GET IT
+	MOVEI	A,.FHSLF	;14 OUR FORK
+	GEVEC			;15 GET FORKS ENTRY VECTOR
+;	JRST	OFFSET(B)	;16 START FORK
+;	JFN			;17 JFN HERE
+
+;curname(file,string)
+;  put current file spec into string
+;b - FCB
+;c - string addr
+;d - string length
+
+curnam:	addi d,4		;d _ string length in words
+	idivi d,5
+	move t,[ascii /     /]	;now init string to blanks
+	movem t,(c)
+	hrli a,(c)
+	hrri a,1(c)
+	add d,c
+	blt a,-1(d)
+	hrro a,c		;now do jfns
+	hrrz b,filjfn(b)
+	move c,[exp 111110000001] ;full file spec
+	setz d,
+	jfns
+	movei t," "		;put blank in over null at end
+	idpb t,a
+	popj p,
+
+;Procedures to compare names - in assembly language for speed, since
+;symbol table lookup tends to be critical.  I have traded space for
+;speed - this code is fairly long, but should be on average very fast.
+;return -1, 0, or +1 depending upon whether 1st arg is less, equal
+;or greater than second.
+
+;CTP: 1st 10 char's - 2 words
+;     LH - count of chars,, RH - pointer to extra words
+;IDLEN - count of char's
+;ID - 1st 10 char's, as 2 words passed by value
+;IDEXT - addr of extra words
+
+;CTPCOM(CTP1,CTP2) - two CTP's.
+
+ctpcom:	setzm 1(p)		;assume equal
+
+;counts
+	hlrz t,2(b)		;count from first
+	hlrz a,2(c)		;count from second
+	camge t,a
+	jrst less		;less
+	camle t,a
+	jrst great		;greater
+
+;first two words
+ife KACPU,<
+	dmove d,(b)		;now the values
+>
+ifn KACPU,<
+	move d,(b)
+	move e,1(b)
+>
+	camge d,(c)
+	jrst less
+	camle d,(c)
+	jrst great
+	camge e,1(c)
+	jrst less
+	camle e,1(c)
+	jrst great
+	caig t,^D10		;more data?
+	popj p,			;no - done
+
+;other words - char count is in T, pointers in B,C
+	hrrz b,2(b)
+	hrrz c,2(c)
+	subi t,^D10
+
+ccoml:	move d,(b)
+	camge d,(c)
+	jrst less
+	camle d,(c)
+	jrst great
+	subi t,5
+	addi b,1
+	addi c,1
+	jumpg t,ccoml
+	popj p,
+
+less:	sos 1(p)
+	popj p,
+
+great:	aos 1(p)
+	popj p,
+
+
+
+;IDCOMP(CTP,LEN,ID,IDEXT) - CTP with global
+;	b    c   d&e   f   g - free
+idcomp:	setzm 1(p)		;assume equal
+
+;counts
+	hlrz t,2(b)		;count from first
+	camge t,c
+	jrst less		;less
+	camle t,c
+	jrst great		;greater
+
+;first two words
+	camle d,(b)
+	jrst less
+	camge d,(b)
+	jrst great
+	camle e,1(b)
+	jrst less
+	camge e,1(b)
+	jrst great
+	caig t,^D10		;more data?
+	popj p,			;no - done
+
+;other words - char count is in T, pointers in B,F
+	hrrz b,2(b)
+	subi t,^D10
+
+icoml:	move d,(b)
+	camge d,(f)
+	jrst less
+	camle d,(f)
+	jrst great
+	subi t,5
+	addi b,1
+	addi f,1
+	jumpg t,icoml
+	popj p,
+
+if2,<	purge get>
+
+	end
+

@@ -1,0 +1,52 @@
+	title PASCOM - common section for Pascal, normal part
+
+	search pasunv
+
+	entry pddt.,lstnew,in.ddt,lstnwl,stk.bt
+	extern no.ddt
+
+ifn klcpu,<
+	entry sn.cod,sn.hep
+> ;ifn klcpu
+
+	reloc 0
+
+pddt.:	pushj p,no.ddt		;this may be changed by PASDDT
+lstnew:	block 1
+in.ddt:	block 1			;non-zero if we are in PASDDT
+stk.bt:	block	1		;bottom of stack
+				;also # sections in stak before creating it
+
+ifn klcpu,<
+lstnwl:	block 1			;"lstnew" for gnew.l
+sn.cod:	block 1			;code section (0 or sn%cod)
+sn.hep:	block 1			;desired last section of heap
+>;ifn klcpu
+
+	prgend
+
+	title PASCMX - common storage for Pascal, from compiler
+
+;This stuff is defined in a separate module because in old versions
+;of the compiler it is done in the main program.  By putting it here,
+;we can use .REL files made by either the old or new version.
+
+	search pasunv
+
+	entry input,output,tty,ttyout
+	entry %cclsw,%rnnam,%rnppn,%rndev,%ccldn
+
+	reloc 0
+
+input:	block filcmp+1
+output:	block filcmp+1
+tty:	block filcmp+1
+ttyout:	block filcmp+1
+%cclsw:	block 1
+%rnnam:	block 1
+%rnppn:	block 1
+%rndev:	block 1
+%ccldn:	block 1
+
+	end
+

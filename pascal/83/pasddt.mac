@@ -1,0 +1,13 @@
+	title PASDDT - linkage to PASDDT
+
+	extern pasdd.
+
+	entptr=77
+	.jbddt=74
+
+	loc .jbddt		;set up so we link to PASDDT
+	xwd 0,pasdd.
+
+	.lnkend 1,entptr	;and save away list of modules for indeb.
+
+	end

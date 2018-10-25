@@ -1,0 +1,217 @@
+This  document  is  a  description  of  DECSYSTEM-20 and DECsystem-10
+Pascal.  It is not intended to be a manual.  There are already two
+of those.  It is more if a "marketing blurb", indicating the facilities
+available and various other items of general interest.
+
+This Pascal system is the result of cooperation among a number
+of different people.  It was originally written at the  University  of
+Hamburg  by  a  group  of  people under the supervision of Prof. H.-H.
+Nagel.  This version was  developed  from  Prof.  Nagel's  by  Charles
+Hedrick,  and  is  maintained by him.  Lee Cooprider and others at the
+University of Southern California have been  particularly  helpful  in
+supplying  improvements, largely to the debugger. The heap manager was
+originally written by Shel Kaphan at Stanford, and adapted for  Pascal
+by  Dave  Dyer at ISI. A number of compiler bug fixes were supplied by
+Andrew Hisgen at Carnegie-Mellon University.  Extended addressing  for
+the  DECSYSTEM-20  (not described in this introduction) was originally
+implemented by Norman Samuelson  at  Sandia  National  Labs,  although
+Charles Hedrick made major improvements to this implementation.
+
+
+This system is intended to be a complete implementation of the Pascal
+language, as defined in the Revised Report (Jensen and Wirth). We 
+also believe it to be in conformance with the ISO Pascal Standard,
+ISO/DP 7185, as published in the second draft proposal, January, 1981.
+We regard the ISO standard as normative, and are prepared to fix any
+cases where programs that conform to the ISO standards do not work
+properly.  There is a separate chapter in the Reference Manual
+describing conformance with the ISO standard.  That chapter includes
+a fairly complete list of the restrictions applicable to this compiler.
+
+This implementation had two basic design goals:
+  - to provide a language that supports all of the facilities of the
+	operating system, without requiring any assembly language
+	programming.
+  - to provide an implementation that is easy for students to use.
+It has one non-goal (to use DEC's term - that is something which was
+not a goal):
+  - optimized code.  The compiler is fairly fast, but produces fairly
+	dumb code.
+
+Let's look at the two goals:
+
+Support of the operating system.  5 years ago, Pascal supported all
+of the features of Tops-10.  This included interrupt handling,
+non-blocking I/O, and lots of other random goodies.  This support has
+the following basic features:
+  - the compiler and debugger are integrated into the operating system
+	so that they act just like a DEC compiler (Fortran, to be exact).
+	(I mention this because the original Hamburg compiler had an
+	odd command scanner, and other non-DEC languages such as Utah's
+	C tend to have strange interfaces.)  Output is generated for
+	CREF to produce cross-reference listings.  The output we do
+	through CREF is superior to the cross-reference listing done
+	by the separate program, CREF, because we separate variables
+	by the same name that are declared in different blocks.
+  - there is a mechanism to allow the user to issue UUO's from Pascal
+	code.  It interacts with the Pascal TYPE system in such a way
+	that you can specify arguments and argument blocks cleanly in
+	Pascal, without having to insert assembly language.  This
+	mechanism is sufficient to support many of the features of the
+	operating system.  I have not supplied higher-level routines
+	because the user can do so and I prefer to put my time into
+	doing things that the user couldn't do for himself.
+  - some facilities can't be done by the user even though he can issue
+	UUO's.  An example is interrupt handling.  The Pascal runtime
+	system has to be set up for it if it is to work.  Such facilities
+	are supported in the Pascal system, and predeclared procedures
+	are supplied for the user.
+  - the I/O facilities allow the user to specify any of the strange
+	status bits and other options when opening devices and files.
+	(Someone once managed to do interrupt-driven non-blocking I/O
+	in Pascal.)
+It is no longer quite accurate to say that I support every last bell
+and whistle of Tops-10, because things have happened in the last 5 years.
+Since I no longer have a Tops-10 system, some more recent facilities
+are not supported.  The most important thing not supported is probably
+the FILOP. UUO, which would allow more than 16 files to be open.  
+Interfaces to other DEC software (Fortran, SORT) are less well developed
+or are non-existent on the Tops-10 system.  In addition, some of the
+older facilities may no longer work, as there is so much stuff in Pascal
+that it is nearly impossible for me to test it all.  I will fix anything
+that is there but no longer works when people point out the problem to me.
+There is one additional recent restriction in the Tops-10 system:
+I no longer support direct user calling of dump mode I/O, USETI, or
+USETO.  Experience showed that this was one case where providing the user
+with the facilities of the operating system was a mistake.  The design of
+Tops-10 I/O is such that random access I/O is a pain in the neck when
+using those low-level tools.  Thus recent versions of Pascal provide
+random access I/O using a file model like that on Tops-20.  That is, you
+can position directly to any byte in the file.  Pascal issues the
+USETI's and USETO's for you as appropriate.  It uses dump mode when
+appropriate (when you are open for update).
+
+Tops-20 is now supported the way Tops-10 was 5 years ago:  every bell
+and whistle is supported:
+  - the compiler looks like a standard DEC compiler (using the new
+	native-mode interface.  By the way, it is undocumented, so
+	we had to figure it out by trial and error).
+  - Instead of allowing UUO's, of course on tops-20 we let the user
+	do JSYS's.  He can do anything he could in assembly language,
+	including putting in ERJMP's and detecting skip returns.
+  - again, facilities that the user couldn't reasonably do, such as
+	interrupt handling, are done within Pascal
+  - the user can specify any of the magic bits in GTJFN or OPENF when
+	opening a file.  We developed a way so that the most common of
+	these options can be done in the same way on Tops-10 and
+	Tops-20.
+  - we support extended addressing fully as to data.  Code is limited to
+	one section.  Any data structure, locally or on the heap, can be
+	as big as you like.  Of course you are constrained by the total
+	address space (and by the amount of swap space on your system).
+	In certain very big programs you may have to insert a directive
+	in the program to specify how many sections are to be allocated
+	to the stack or the heap.
+In addition to this, on Tops-20, we supply packages to do various things
+that the user could do for himself with JSYS's but probably wouldn't
+want to, and we interface to various DEC software:
+  - we have a COMND jsys package, which we now use extensively in our
+	own software work.  We have a simulation of the COMND jsys for
+	Tops-10, and use it in some software that is common to both
+	systems.  [The DEC Tops-10 COMND implementation is much better.
+	We can't use it because they copied source from the Tops-20
+	operating system.  This is something DEC can do but we can't.]
+  - we interface to Fortran and SORT/MERGE
+  - we have a package to let you make requests to QUASAR
+  - we have routines to do IPCF (although I think these may not be
+	in the standard distribution).  We have used these to implement
+	various servers.
+There are probably a few things from very recent monitor releases that
+haven't gotten into the Tops-20 version either, although the only one
+I can think of is arithmetic exception trapping.  We support it through
+the interrupt system, but there is a new, more efficient method in
+recent versions of Tops-20.  To give you an indication of the degree
+of completeness, we have implemented a networking system between 2
+DEC-20's.  This uses the swap space on a mountable disk pack, shared by
+both systems.  It handles file transfers, mail, and a few other things.
+It uses the DSKOP jsys to do the actual low-level disk I/O on a physical
+level.  (Normal disk I/O can't be done from two systems at the same
+time.) This system was originally done entirely in Pascal.  It includes
+two server processes and a user program that communicates with the
+server by IPCF.  A couple of recent pieces have been done in assembly
+language: (1) the mail interface had to be put inside XMAILR, and that
+is in assembly language; (2) one of my staff didn't know Pascal and did
+know MACRO - that part could and should have been done in Pascal.
+
+Now, for making it easy for students to use.  Of course the design of
+Tops-10 and Tops-20 helps a lot here.  The COMPILE, EXECUTE, and DEBUG
+commands are very nice.  So we interface to them.  Aside from that, the
+major features are fast compilation and a good debugger. These are all
+comparative.  I will not claim that Pascal is the world's fastest
+compiler or the world's best debugger, but it is certainly good in both
+of these areas.  The debugger is a true source-level debugger.  While
+debugging your program you can look at any line in the source.  When you
+reach a breakpoint, the debugger shows you the source for that line (and
+the next few).  You can look at and change variables, using commands
+that look like Pascal assignment statements.  There is even an
+editor-like search command for the current source file, so you can find
+places in the source. You can single-step your program.  That is, when
+you enter single-step mode, each time you hit <CR>, one line of your
+program will be executed, and the next line will be displayed.  (You can
+turn off the display for very slow terminals or dialup lines.) If
+control goes into a subroutine and you don't want to follow its
+execution, you can do <ESC>.  This causes execution to continue
+silently until you exit from that level.  (This is somewhat like $$X in
+DDT, but has the advantage that you type the <ESC> after you enter the
+subroutine.  Half the time people forget to type $$X and find themselves
+in the subroutine.  In DDT it is then too late - you have to continue
+$X'ing until the end.  In PASDDT, since you say <ESC> after you are in
+the subroutine, that problem never happens.)
+
+There are two additional things that other people are working on that
+would make it nicer for students:
+ - the load-and-go compiler.  Stanford has done this to an earlier
+	version, but hasn't updated it to the current one.  If they
+	ever do, I will support it.  Load and go has both advantages
+	and disadvantages.  The main advantage is that it avoids
+	having to use LINK to load your program.  Typically that takes
+	at least as much CPU time, and more real time, than the
+	compilation.  The main disadvantage is that you can't link
+	separately compiled modules.  Most of our faculty want students
+	to use this facility, so load and go wouldn't do us much good.
+	(That's why we have left it to Stanford.)
+ - some additional work on the debugger.  The nicest thing would be
+	a video-oriented debugger, that puts your source on the screen
+	and moves the cursor around to show you execution.  Also, some
+	minor improvements might be helpful.  Various people are working
+	on various of these, but I don't know when (if ever) they will
+	materialize.
+
+Currently we distribute Pascal on request to anyone who wants it.  We
+also submit it to DECUS.  It is generally better for the users (but
+worse for us) for people to get it directly from us, as the DECUS version
+is usually out of date.  People should send us a 2400' reel of tape,
+and include return postage.  We prefer return postage as stamps or
+postage meter labels.  Checks increase the bookkeeping we have to go
+through.  I am considering asking people to voluntarily include $100
+to help us defray the costs of distribution and support.  If you 
+advertise this, you should probably include that.  I would be happy
+if DEC wanted to distribute Pascal in some way.  In particular, if
+any software specialists want to give it to clients, please encourage
+them to do so.  I will try to keep the copy at MARKET up to date.
+It should be used as the master source within DEC for such distribution.
+Under other circumstances, I discourage people from sending it to other
+people, because it tends to lead to out of date and incomplete versions
+wandering around.  (It is surprising how often I get calls from people
+who have what seems to be our Pascal on their system, but have no
+documentation or source.  I consider it very important for them to
+have access to source for a system of this kind.)
+
+As far as the future goes, I regard the main limiting factor as the
+quality of the code generated by the compiler.  In the long run, I am
+going to see if I can find some way to transport an optimizing compiler
+to the 20 from some other system.  This will only happen if I find
+someone else to do it, or if I find a retargetable compiler where the
+amount of effort needed to move it is very small.  I do not plan any
+major development efforts.
+

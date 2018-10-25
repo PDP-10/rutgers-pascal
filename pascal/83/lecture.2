@@ -1,0 +1,554 @@
+Pascal, Part II.
+
+This lecture will be about the part of Pascal that is most "Pascalish",
+i.e. those aspects of the language that differentiate it from such
+languages as Fortran and Algol.
+
+			RECORDS
+
+type
+  gender=(male,female,other);
+  persrec=record
+	name:packed array[1..10]of char;
+	ssn:integer;
+	sex:gender
+	end;
+
+var
+  pers,pers2:persrec;
+
+begin
+pers.name := 'Hedrick   ';
+pers.ssn := 123456;
+pers.sex := male;
+writeln(pers.name);
+pers2 := pers;
+
+...
+
+TYPE section contains definitions of user-declared types.  Once defined,
+used like INTEGER, REAL, etc.  The following are equivalent:
+		type
+		  bigarray=array[1..100]of integer;
+		var
+		  x:bigarray;
+and:
+		var
+		  x:array[1..100]of integer;
+
+GENDER is an "enumerated type".  If you declare a variable to be of
+type GENDER, it can take on the values MALE, FEMALE, or OTHER, and
+only those.  MALE, FEMALE, and OTHER are added to the language as constants.
+
+A RECORD contains a list of "fields".  Since PERS is a PERSREC, it consists
+of three fields:
+	PERS:    [DEC-20 implementation]
+ 		  ---------------------
+	   NAME:  :   :   :   :   :   :      5 chars to a word on DEC-20
+		  ---------------------
+		  :   :   :   :   :   :
+		  ---------------------
+	   SSN:   :		      :
+		  ---------------------
+	   SEX:   :		      :
+		  ---------------------
+
+You can treat PERS as a single object, or you can look
+at these individual fields.  If you say
+        PERS2 := PERS 
+you are treating it as a single object.  The whole record, i.e. all of
+its fields, is copied.
+
+To look at an individual field, say PERS.field, e.g. PERS.NAME.
+PERS.field is treated as a simple variable with the declaration given in
+the RECORD declaration.  Thus PERS.SSN is an integer variable.  You can
+do arithmetic with it or anything else:
+	PERS.SSN := PERS.SSN + 1
+
+When a variable is declared in the VAR section, it is just a fixed piece
+of memory, with space for all of its fields.
+
+If you need to create records dynamically, Pascal puts them into the
+"heap". This is a part of memory that expands automatically.  NEW
+allocates more space.  In this case, all that gets allocated is a
+"pointer" to the variable.  Pointers are indicated by ^
+
+{This program fragement reads names, one per line of input.  It constructs
+ a list of records with these names}
+type
+  perslist = record
+		name:packed array[1..10]of char;
+		next: ^perslist
+		end;
+
+var
+  listhead,newone: ^perslist;
+
+begin
+listhead := nil;
+while not eof do
+  begin
+  new(newone);
+  read(newone.name); readln;
+  newone^.next := listhead;
+  listhead := newone
+  end
+end.
+
+
+In a type declaration, ^ BEFORE a type name means we have a pointer
+to a record of that type.
+      RECORD
+	 ...
+	 NEXT: ^ FOO     <------  address of a FOO is put here
+	 ...
+
+      RECORD
+	 ...
+	 NEXT:FOO     <----- an actual FOO record is put here
+	 ...
+Alternatively, you can say
+      FOOPTR = ^ FOO;
+      ...
+      RECORD
+	...
+	NEXT: FOOPTR
+	...
+
+In the body of the program, ^ AFTER a variable means to follow the
+pointer.  Consider
+	LISTHEAD^.NEXT
+LISTHEAD is NOT a record.  It is a pointer to a record.  So
+LISTHEAD.NEXT would be illegal.  LISTHEAD^ is a record, the record
+pointed to by LISTHEAD. Since it is a record, it has fields.  Thus
+LISTHEAD^.NEXT is one of its fields.
+
+NB: Some versions of the Pascal standard do not have any way to
+recover space once it is allocated.  The proposed new standard has
+DISPOSE(LISTHEAD).  This is implemented on the DEC-20.  Note that
+DISPOSE returns the record pointed to by LISTHEAD.  If LISTHEAD
+has pointers in it, the records pointed to by them are not
+returned.  You should return them first if you want to.  The
+rule is:
+    Each call to DISPOSE returns exactly one record.
+
+NIL is a pointer constant.  It is compatible with any pointer type.
+It is a pointer that points notwhere.  If you LISTHEAD^ when
+LISTHEAD contains NIL, you will get an error.
+
+
+			FILES
+
+	program test(infile,output);
+
+	type
+	  binfile=file of integer;
+
+	var
+	  infile:binfile
+
+This is equivalent to
+
+	program test(infile,output);
+
+	var
+	  infile:file of integer
+
+
+A file is just a variable.  It just be declared, like any other.
+
+FILE OF CHAR is a normal readable file, i.e. a file with characters
+in it.  Each time you do an input, you get one character.
+
+FILE OF INTEGER is a binary file.  Each time you do an input, you 
+get a complete integer, in internal format.
+
+You can have FILE OF anything, although some implementations may not
+allow FILE OF FILE, and pointers in files are a bit odd.  All except
+CHAR are binary.  Pascal just dumps the internal code for the object,
+using however many words it takes in memory.
+
+When you declare a file, you get a "buffer variable", name^
+     var
+	infile:file of integer
+INFILE^ is the buffer variable for INFILE.  It is of the same type as
+the base type of the file, in this case INTEGER.  The buffer variable
+acts as a "window" into the file.  It contains the current element
+of the file.
+   GET(INFILE) reads the next element of the file, putting it into
+	the buffer variable.
+   PUT(INFILE) writes the current contents of the buffer variable
+
+Here is a program to copy a binary file:
+	program bincopy(infile,output);
+
+	var infile,outfile:file of integer;
+
+	begin
+	reset(infile);	{reset opens a file for read}
+	rewrite(outfile);  {rewrite opens a file for write}
+	while not eof(infile) do  {EOF is true at end of file}
+	  begin
+	  outfile^ := infile^;
+	  put(outfile);
+	  get(infile)
+	  end
+	end.     {all files are automatically closed at the end}
+
+Note
+   - by listing INFILE and OUTFILE in the PROGRAM statement, it
+	tells the system to get file names from the outside:
+		JCL in IBM
+		prompt for a file name in DEC-20
+		logical file names for VAX
+		UCSD is non-standard
+   - You must open all files except INPUT and OUTPUT with RESET
+	or REWRITE.  (INPUT and OUTPUT are openned automatically
+	if listed in the PROGRAM statement.)
+   - You must declare all files except INPUT and OUTPUT.  (INPUT
+	and OUTPUT are predeclared as FILE OF CHAR.)
+   - RESET reads the first element
+   - EOF is set when a GET fails, i.e. when you try to do a read
+	beyond the last one.
+
+Text files:
+  The following are predeclared:
+	type text=file of char;
+	var input,output:text
+
+  The program BINCOPY shown about will work on text files, if
+  you change the file declarations to FILE OF CHAR.  That is,
+  the primitives for text files are still GET and PUT.  But
+  in addition, READ and WRITE are defined, and most users will
+  use them.  Instead of dealing with single characters, they
+  deal larger objects.  E.g. to read 1.23E3 with GET you would
+  see a 1, a ., a 2, a 3, an E and a 3.  But if you said
+  READ(X), this would automatically call GET for you 6 times
+  and put the characters together to form the number 1230.0.
+
+  To show the relationship between READ and GET, I will show
+  how to write READ in terms of GET, at least for reading
+  integers:
+
+  READ(I), where I is an integer:
+
+	while (input^ = ' ') or eoln(input) do get(input);
+	i := 0;
+	while (input^ in ['0' .. '9']) do
+	  begin
+	  i := ord(input^) - ord('0') + 10*i;
+	  get(input)
+	end
+
+  - skip spaces and end of lines
+  - decode digits until you see a non-digit
+  - NB:  input^ "looks ahead" by one character.  That is,
+	after reading 123, I is 123, but INPUT^ contains the
+	first character after the 123.  This is because you
+	can't tell that you are at the end of a number until
+	you see a non-digit.  So INPUT^ is left at this
+	non-digit.
+
+  READ(CH), where CH is a CHAR:
+
+  CH := INPUT^; GET(CH)
+
+  - This is so READ(CH) done right after READ(I) will get the
+	first character after the integer.  This character is
+	already in INPUT^.  So you first use the character,
+	and then do a GET
+
+  READ can read
+    - integers (with sign)
+    - reals.  In the Pascal standard, if you do READ(X) and X is
+	a real, the thing you read must have the syntax of a real.
+	That is, if the program wants a real, you can't type 123,
+	you must type 123.0
+    - CHAR  (a single character)
+    - in DEC-20 and VAX, PACKED ARRAY OF CHAR.  In UCSD, STRING.
+
+  End of line is funny.  Some systems don't have EOL characters.
+  So at end of line, INPUT^ contains a blank.  That is, when you
+  type carriage return, what the program sees is a blank.  In
+  order to know that it was a carriage return and not a real blank,
+  Pascal sets a special thing EOLN(INPUT).  So to copy a text file:
+
+	while not eof do
+	  if eoln
+	    then begin writeln; readln end
+	    else begin output^ := input^; put(output); get(input) end
+
+  -  You can't do OUTPUT^ := INPUT^ at the end of line, since that would
+     turn all end of lines into blanks.  
+
+  -  WRITELN writes an end of line. Conceptually it is like
+     WRITE(carriage-return).  But since some systems don't use
+     carriage-return a special function is needed.
+
+  -  READLN reads past an end of line.  It puts the first character of
+     the next line into INPUT^:
+	skip the rest of the characters on the current line
+	skip the end of line
+        get the 1st char of the next line into INPUT^
+     READLN(X,Y) is like READ(X,Y); READLN;
+
+  Note that all of these functions take optional arguments to indicate
+  what file they apply to.  If you leave the argument out, the default
+  is INPUT for input functions and OUTPUT for output functions.
+	READ(X) = READ(INPUT,X)
+	READLN(X) = READ(INPUT,X)
+	READLN = READLN(INPUT)
+	EOF = EOF(INPUT)
+	EOLN = EOLN(INPUT)
+	WRITE(X) = WRITE(OUTPUT,X)
+	WRITELN(X) = WRITELN(OUTPUT,X)
+	WRITELN = WRITELN(OUTPUT)
+
+  WRITE can write
+    - integers
+    - reals
+    - char
+    - packed array of char
+    - Boolean.  Writes as TRUE or FALSE
+
+  You can choose the format for WRITE, by using a : after the expression
+	WRITE(I:5,X:10,Z:I)
+  specifies to use 5 columns for I, 10 columns for X, and I columns for Z
+
+  Reals are normally written in E format, e.g.
+	1.2345E01
+  To get F format, use another colon:
+	WRITE(X:10:2)
+  specifies F format, in 10 columns, with 2 digits after the decimal pt.,
+  e.g.
+	      1.23
+  with 6 leading blanks.  It is like format F10.2 in Fortran.
+
+
+			INTERACTIVE I/O
+
+The RESET problem:
+
+Consider:
+  {wrong}
+  RESET(FOO);
+  WRITE('Please type a number: '); READ(FOO,I);
+This doesn't do what you expect.  RESET is defined as reading the first
+character, and READ(I) uses the first character from FOO^ before reading
+the second character.  This is the one-character lookahead problem.
+Thus the program will try to read the number before printing the prompt.
+
+Solutions:
+  Tell the user to hit carriage-return at the start of the program,
+	wait for the prompt before typing the real data.  This works
+	when you are reading numbers, since the program skips 
+	end of lines and blanks.  thus the extra carriage-return
+	doesn't hurt.
+  More generally, have the program do a READLN to throw away the
+	extra carriage-return:
+		RESET(FOO);
+		WRITE('Please type a number: '); READLN(FOO); READ(FOO,I);
+	You must do the READLN after the WRITE, as it reads the first
+	character on the next line.
+  If you are on the DEC-20 or any CDC system, declare the file as
+  	interactive.  This makes Pascal supply the extra carriage
+	return for you.
+	   For the file INPUT, which is opened automatically, put
+	   / after it in the PROGRAM statement (CDC) or :/ (DEC-20)
+		PROGRAM FOO(INPUT:/,OUTPUT)  - DEC-20
+		PROGRAM FOO(INPUT/,OUTPUT) - CDC
+	   For other files, they are opened via RESET.  I think on
+	   CDC, / still works.  On DEC-20, specify /I in the RESET:
+		RESET(FOO,'','/I')
+  Some systems (including VAX) use "lazy I/O".  This delays reading
+  characters until they are actually used.  In this case, the
+  original version will work fine.
+
+The READLN problem:
+
+Often you want to throw away junk.  READLN is good for this.  It
+throws away anything left on the current line and goes to the next.
+But READLN reads the first character of the next line.  Thus you
+must do it after the prompt.
+	WRITE('Please type a number: '); READLN; READ(I)
+If you used
+	{wrong} WRITE('Please type a number: '); READLN(I);
+this would be equivalent to
+	{wrong} WRITE('Please type a number: '); READ(I); READLN;
+This would do the READLN at the wrong time.
+
+Note that the solution to both problems is the same.  The correct
+sequence to use is
+   write prompt
+   readln
+   read(x)
+The sequence 
+   {wrong}
+   write prompt
+   readln(x)
+will result in the program waiting for input before printing the prompt,
+unless your implementation uses "lazy I/O", in which case the wrong
+way is right.
+
+
+Each implementation has a slightly different solution for interactive
+I/O:
+   DEC-20 and CDC
+	- put the READLN in as explained above
+	- make the file interactive, to prevent the implicit GET
+	    after RESET.  You must specifically request this.
+   UCSD
+	- make the file interactive.  This changes the definition
+	  of READ and READLN, so they no longer do one-character
+	  lookahead.  In this case, the method shown above as
+	  wrong is right:
+	     write prompt; readln(x)
+	- INPUT and OUTPUT are interactive by default
+	- after reading an item, the contents of INPUT^ are different
+	  than in standard Pascal, because there is no one-character
+	  lookahead.
+   NBS (PDP-11), CMU (PDP-10), VAX - lazy I/O
+	- GET doesn't do anything until someone actually looks at
+	  INPUT^.  The read is done then. This allows you to use
+	     write prompt; readln(x)
+	  But it doesn't always work, e.g. if you pass a file buffer
+	  variable as a parameter to a procedure and do GET on the
+	  file.
+
+All known textbooks ignore this.  They teach 
+  readln(x,y)
+as reading a line with x and y on it, implying (and in some texts
+saying) that 
+  write prompt; readln(x,y)
+will work.  The major motivation of UCSD's change to the semantics of
+GET, and lazy I/O, is to make Pascal work with these incorrectly written
+textbooks.  With these implementations standard textbooks can be used
+as long as the student does not think clearly about what is going on.
+If he does, he will wonder how this sequence can possible work.
+
+
+		MORE DATA TYPES
+
+Subrange types
+
+ type
+   smallint=0..255;
+   lightcolor= pink..lavender;
+ var
+   i:smallint
+
+These allow the system
+ - to save space by using only enough bits for the subrange
+ - to put in checking code to verify that you don't produce
+	something outside the range
+
+
+
+Packed records
+
+   packed record
+	a:0..255; b:0..3; c:^form
+   end
+
+This will all be put in one PDP-10 word.  If PACKED were not
+used, each item would be in a separate work.  This is a time-space
+tradeoff.  Putting more than one thing in a word saves space,
+but slows down access.  Packed records can also be used for
+tricks in preparing magic control blocks for operating system
+calls.  Records and arrays can be packed.
+
+
+Variant records
+
+  record
+	name:packed array[1..10]of char;
+	case sex:sextype of
+		male:(battingave:real; beer: beerbrand);
+		female:(bowlingave:color;  age:0..21)
+  	end
+
+  All records of this type have a NAME and SEX field.  Depending
+  upon the value of SEX, they have
+	NAME, SEX, BATTINGAVE, BEER
+  or
+	NAME, SEX, BOWLINGAVE, AGE
+  These fields are stored in the same place.  This is
+
+	male				female
+
+	======================    =========================
+	:   name	     :    :   name		  :
+	----------------------    -------------------------
+	:		     :    :			  :
+	======================    =========================
+	:   sex		     :    :   sex		  :
+	======================    =========================
+	:   battingave	     :    :   bowlingave	  :
+	======================    =========================
+	:   beer	     :    :   age		  :
+	======================    =========================
+
+This allows you to save space when you know that certain fields
+will never be needed at the same time.  You can also declare
+a variant record without a place to store the key:
+
+
+  record
+	name:packed array[1..10]of char;
+	case sextype of
+		male:(battingave:real; beer: beerbrand);
+		female:(bowlingave:color;  age:0..21)
+  	end
+
+Then you can't tell by looking which type of record you have.
+This can be useful for tricks in converting data types:
+
+  x:packed record case Boolean of
+	true:  (r:real);
+	false: (i:integer)
+	end;
+  begin
+  x.r := 1.0;
+  writeln(x.i)
+
+This will write the real number 1.0 as if it were an integer.  It
+might be useful for seeing what the representation of real numbers
+is on your system.
+
+
+Sets
+
+	type
+	  cset=set of char;
+	var
+	  s1,s2:cset;
+	  ch:char;
+	...
+	s1 := ['A']; s2 := ['B'];
+	s1 := s1 + s2;    {s1 is now ['A','B']}
+	s1 := s1 * ['B'..'Z']   {'B'..'Z' is the set of B through Z.
+				 * is intersection. s1 is now ['B']}
+	s2 := ['A'..'C','P'..'Q']   {A,B,C,P,Q}
+	s1 := ['A'..ch]
+
+   operations:
+	+	union
+	*	intersection
+	-	difference
+	= <>	equality
+	<= >=	inclusion
+	IN	membership      IF 'A' IN S1 THEN ...
+
+   - You can have sets of any finite type: subranges, enumerated
+	types, or CHAR.
+ 		SET OF 0..35
+		SET OF COLOR
+   - Each implementation has a maximum set size.  72 on DEC-20.
+	Since there are 128 ASCII characters, SET OF CHAR is
+	kludged on the DEC-20.
+   - Sets are supposed to be implemented fairly efficiently,
+	as bit vectors, using full-word logical operations.
+
+	
+	
+  

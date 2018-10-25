@@ -1,0 +1,55 @@
+	title PASDAT - date routine for Pascal-20
+
+;Pascal believes that it is calling Fortran's date.  We want to
+;leave it that way, because on Tops-10 it is rather hard to
+;figure out the date.  On Tops-20 we supply our own DATE because
+;in the older versions of Fortran, DATE would invoke PA1050,
+;which we can't allow.  Thus this is a native-mode simulation of
+;Fortran's DATE.  Actually in the current Fortran, DATE is native
+;mode, so if we were sure everybody was using that version, we
+;would forget this.  In case somebody tries mixing Pascal and
+;Fortran, and his Fortran calls DATE, we had better make sure that
+;this version will work when called from Fortran.  In fact we
+;believe that the code below is functionally identical to that
+;in FORLIB.
+
+	entry date,daytm.
+
+	search monsym,pasunv
+
+	twoseg
+
+	reloc 400000
+
+date:	hrroi a,d	;put it in D
+	seto b,		;current date
+	movsi c,(ot%ntm);no time (date only)
+	odtim%
+	tro e,40*2	;put in a blank as last char for Fortran
+	move b,0(o)	;address where Fortran wants it to go.
+	movem d,(b)	;can't use DMOVEM because of KA Tenex.
+	movem e,1(b)	
+	popj p,
+
+daytm.:	push p,0(p)	;supply ret addr; -1 will be returned value
+	push p,a
+	push p,b
+	push p,c
+	push p,d
+	seto b,		;current time
+	setz d,
+	odcnv
+	tlz d,777777	;RH(4) is time in sec
+	imuli d,^D1000	;convert to msec.
+	movem d,-5(p)
+	pop p,d
+	pop p,c
+	pop p,b
+	pop p,a
+	popj p,
+
+	reloc 0
+
+dattmp:	block 2
+
+	end

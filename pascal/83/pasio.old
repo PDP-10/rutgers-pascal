@@ -1,0 +1,5239 @@
+	title PASIO - I/O routines for TOPS-20 Pascal
+
+;edit history - begins with edit 2
+
+;2 - keep disk open from blowing up when file has byte size of 0
+;3 - improve recovery from arithmetic errors
+;4 - set up to process pushdown overflow
+;5 - Tenex
+;6 - replace pasin. by pasif., which doesn't use pushj, in case
+;	emulator is active (as it is for tenex)
+;7 - more Tenex, convert some more erjmp's to erjrst, gnjfx1
+;	end of line for tty I/O
+;	tty openned as file should still use pstin
+;10 - add multiple page buffers.  This involves major edits to the
+;	whole map I/O section, getpag/relpag, and the callers thereof
+;	I have not put edit numbers on this edit.
+;11 - remove DMOVE, for KA Tenex
+;12 - mark file as unopened after closing it
+;13 - fix open of TTY and TTYOUTPUT, since edit 12 broke it
+;14 - general Tenex TTY I/O, supposedly the INTERLISP-style line
+;	Few TENEX sites support the PSTIN JSYS.
+;15 - fix up what we do on errors a bit
+;16 - use GET. instead of GET;  don't look for line numbers unless
+;	first word of file is line numbered  (undone in edit 23, except SRI)
+;17 - don't do line number test for size=0.  For version 1 monitors.  We
+;	would get ill mem read, since ERJMP didn't always work in version 1.
+;20 - replace newpage,retpage with getpages,relpages.  Move old ones to PASOLD
+;21 - Add code for Tenex with PA2040
+;22 - fix f%ltst routine so it doesn't need to use BKJFN, since that won't
+;	work for tapes [monitor bug].  NB:  Originally, we tested every word
+;	in the file to see if it was a line number.  I still prefer that code.
+;	The business of testing the first word and turning off the test if it
+;	is not a line number is done strictly for SRI.  The code is ugly, in
+;	in case of errors in reading the first word, who knows what to do?
+;	The reason SRI needs it is because their version of EMACS randomly
+;	sets the low order bit in files it creates.
+;23 - put funny line number testing under SRI conditional
+;24 - add code for dynamic heap management (DDyer@USC-ISIB)
+;25 (DFloodPage@BBNE) use non-binary mode in RDSTR on Tenex
+;       Don't set bit zero in chfdb on Tenex
+;26 - missing PSOUT of prompt in error handling
+;27 - all continuation after quota exceeded.  This is a "temporary" fix.
+;	A more general redesign to allow continuation in all cases
+;	is in PASIO.NEW.  However it is going to be a bear to debug, so
+;	this patch is being used as a safe one that does the job.
+;30 - replace WRTPC with RUNERR, that allows continuation
+;31 - new routines - SHOWLN and FIXLN
+;32 - add TTYPR. - prompt for INPUT open on TTY:
+;33 - retry opens when something goes wrong
+;34 - new intelligible form for funny open options
+;35 - minor fix to maperr, for holes in file
+;36 - removed setting EOLN in CLREOF
+;37 - typo: had move instead of movei at HAVSPC
+;40 - handle zero counts for SOUT, SOUTR, and SINR
+;41 - fix bad stack offset
+;42 - fix CLREOF - AC 2 was being garbaged
+;43 - fix NEWCL. - had reversed AC 1 and 2
+;44 - better calculation of file size when different byte sizes
+;45 - remove memory management from PASIO to allow change to FOROT6
+;46 - extended addressing
+;47 - implement OF%PLN for disk I/O
+;50 - SIXBIT STOP!! on stack for FOROTS
+
+	search	jobdat,monsym,macsym,pasunv
+	sall
+	.direc	sfcond
+	.direc	flblst
+
+if1,<
+ife tenex,<printx  Tops-20 version>
+ifn tenex,<
+ ifn sumex,<printx  Sumex version>
+ ife sumex,<
+  ifn pa2040,<printx Tenex PA2040 version>
+  ife pa2040,<printx Tenex non-PA2040 version>
+ >;ife sumex
+>;ifn tenex
+ifn srisw,<printx  SRI line number kludge included>  ;[23]
+>;if1
+
+	gnjfx1=601054	;[7] T20 calls this gnjfx1, Tenex gnjfx2.  In
+			;[7]    Tenex gnjfx1 is something else.  So this
+			;[7]    definition should let us transport the code.
+ifn sumex,<
+opdef	pstin	[jsys 611] ;[14] SUMEX has PSTIN, so does IMSSS, but nowheres
+			   ;[14]    else is it guaranteed!  Thus, where the
+			   ;[14]    SUMEX switch is not, we simulate the 
+			   ;[14]    INTERLISP string reading stuff
+>
+
+opdef sfm [jrst 14,]	;Macro hasn't heard of this yet
+define xblt(ac,foo),<extend ac,[020B8]>
+
+
+mapbfs==4	;default number of pages in buffer for mapped I/O
+ifn tenex,<mapbfs==1> ;except for Tenex, no advantage to more than 1
+		;[the code should work for .gt. 1 even in tenex, though]
+oldcom==1	;kludges needed to run this with .rel files made
+		;by the tops-10 compiler (alas, I have never removed
+		;the last vestiges of this program structure.  So this
+		;switch is mostly a comment showing what should be
+		;cleaned up.)
+
+	entry	initb.,init.b,initz.
+	entry	endl,runer.,gotoc.,dispc.,ilfil.
+	entry	resetf,rewrit,getch,get.,putch,put,clofil,getchr
+	entry	getfn.,getln,putln,putpg,getlnx,putlnx,putpgx,getlnz
+	entry	putx,getx.,break,breaki
+	entry	setpos,curpos
+	entry	pasif.,end,quit,clreof
+	entry	illfn,norcht,norchx,norchp,norcxp
+	entry	inxerr,ptrer.,srerr
+	entry	rename,delf.,append,update,resdev,relf.,nextfi,relcl.	;[260]
+	entry	erstat,analys,lstrec
+	entry	ttypr.,getnew
+	entry	getpag, relpag, newcl., no.ddt
+
+	extern	getpg.,relpg.,pasim.,pasex., new ;moved to PASMEM/PASFOR
+	extern	tty, ttyout, input, output
+	extern  pddt.,lstnew,in.ddt,lstnwl,stk.bt
+
+ifn pa2040,<extern $$rdtty, $$texti>
+
+	intern	%PASVR
+
+ifn klcpu,<
+	entry	gnew.l
+	entry	getsec, getsc., relsec, s.cre
+	extern	%PASXT
+	extern	.xstrt,xmais.
+	extern 	sn.cod,sn.hep
+	.assign .xend,.xstrt,1
+>;ifn klcpu
+
+	twoseg
+	reloc	0
+
+ifn klcpu,<
+hepbot:	block	1
+sectab:	block	<sn%max/^D18>+1
+>;ifn klcpu
+
+	reloc 400000
+
+no.ddt:	push	p,a
+	move	a,[jfcl]
+	movem	a,pddt.
+	pop	p,a
+	ret
+
+ife tenex,< ;[27]
+;
+;CHKQUO should be used after any JSYS that might get a disk quota overflow.
+;  Note that it can be followed by an ERCAL or ERJMP, which will activate
+;  if any other error condition is present.
+;CHKQUO should not be used after ILDB or IDPB.  ERCAL MAPERR is the
+;  canonical error handler for that.  MAPERR handles quota errors itself.
+define chkquo,<	ercal quochk>
+> ;ife tenex
+
+ifn tenex,<
+define chkquo,<> ;[27]
+ ife sumex,<		; TENEX GETER loads 4-10 with PSB
+define geter%,<call .geter>
+.geter:	push p,4
+	push p,5
+	push p,6
+	push p,7
+	push p,10
+	jsys 12		; geter
+	pop p,10
+	pop p,7
+	pop p,6
+	pop p,5
+	pop p,4
+	ret
+ >;ife sumex
+>;ifn tenex
+subttl	memory allocation
+
+ifn klcpu,<
+	;initialize the extended heap
+
+init.h:	move	a,lstnew	;save old lstnew
+	movem	a,lstnwl	;as lstnwl for gnew.l
+	movei	b,1		;ask for one section
+	hlrz	c,stk.bt	;start right below stack
+	sos	c
+	camn	c,sn.cod	;or is code in the way?
+	 sos	c		;yes, drop down one more
+	call	getsc.		;allocate a section
+	movem	b,hepbot	;bottom of heap
+	hlrzm	b,sn.hep	;section #
+	hllom	b,lstnew	;end of heap
+	ret
+>;ifn klcpu
+
+;trivial memory allocator
+; the complex one, including dispose, is in HEAP.MAC.
+
+getnew::movn	a,b		;must be interruptible
+	addb	a,lstnew	;get new addr and update lstnew at once
+	jumple	a,nonew		;full...
+ifn klcpu,<	;note - fall into new0 if non-kl
+	skipn	sn.cod		;extended?
+	 jrst	new0		;no
+	caml	a,hepbot	;heap full?
+	 jrst	newxit		;not yet
+;go get another section for the heap...
+	hlrz	c,a		;c - lowest section number desired
+	push	p,c
+	push	p,b
+	push	p,a
+	move	b,sn.hep	;b - number of sections needed
+	sub	b,c		;  [existing - requested]
+	call	getsc.		;allocate .B sections
+	movem	b,hepbot
+	hlrzm	b,sn.hep
+	pop	p,a
+	pop	p,b
+	pop	p,c
+	camn	c,sn.hep	;did we get the section we wanted?
+	 jrst	newxit		;yes, all is ok
+	move	a,hepbot
+	cain	a,nil		;is memory full?
+	 jrst	nonew		;yes...
+	hllo	a,hepbot	;no, so take top of that page
+	movem	a,lstnew
+	jrst	getnew		;and try again!
+
+;gnew.l - this is a version of NEW intended when you need a record
+;  in the same section as the code.
+gnew.l::skipn	sn.cod		;extended?
+	 jrst	new		;no, use normal local new
+	movn	a,b		;must be interruptible
+	addb	a,lstnwl	;get new addr and update lstnew at once
+	camge	a,.jbff		;overlap low?
+	 jrst	nonew		;yes, heap full
+ifn klcpu,<hrl	a,sn.cod>	;make it local...
+	move	b,a
+	ret
+>;ifn klcpu
+
+;new0 - this code is used for NEW in section 0
+new0:
+ifn nil,<
+;If NIL is non-zero, there is a problem: we could theoretically
+;generate a block whose address looks like NIL.  We check for that
+;and throw it away if so.
+	cain	a,nil		;if result is nil
+	 jrst	newnil		; get another one!
+>
+	camge	a,.jbff		;overlap low?
+	 jrst	nonew		;yes, heap full
+newxit:	move	b,a
+	ret
+
+;Here if nothing more available
+nonew:	move	t,(p)		;this is addr for error printer
+	call	memfu.
+	movei	b,nil		;return NIL if he tries to continue
+	ret
+
+ifn nil,<  ;not needed if NIL is 0
+;here if the result is NIL - we can't have any real record be NIL, so
+;  try again.  This code can never be reached in extended addressing.
+newnil:	caig	b,0		;if size 0, adjust to 1 so we go somewhere
+	 movei	b,1
+	jrst	getnew		;and try again
+> ;ifn nil
+
+;[43] reverse roles of a and b after call to NEW, remove call to
+;NEWXIT, which had been used to get value back in b
+newcl.::push	p,b		;here to clear result
+	call	new
+	pop	p,a
+	jumple	a,cpopj		;if 0, nothing to clear
+	setzm	(b)		;clear first
+	sojle	a,cpopj		;anything else to clear?
+ifn klcpu,<
+	skipe	sn.cod		;extended addressing?
+	 jrst	[push	p,b	;save result
+		move	t,a
+		xmovei	a,(b)
+		xmovei	b,1(b)
+		xblt	t,
+		pop	p,b
+		ret]
+>;ifn klcpu
+	add	a,b		;last address
+	hrli	t,(b)		;first address
+	hrri	t,1(b)		;make blt for clear
+	blt	t,(a)
+	ret
+subttl	runtime error handler
+
+;runer. - general-purpose routine for processing runtime errors.
+;  if t matters to a continuation, we assume it has been saved at erracs
+;  t - addr of PC to print out
+;  call runer.
+;  here if user continues (after correcting error, one hopes)
+;This routine prints a PC, then either goes to a debugger (if there
+;is any) or warns the user that continuation is at his own risk.
+;If there is any reason to believe that P is blown, you had better
+;supply a good one before calling this guy.
+
+	reloc
+
+ddtgo:	block 1
+erracs:	block 20
+
+	reloc
+
+runer.::movem	0,erracs	;save the AC's
+	move	0,[1,,erracs+1]
+	blt	0,erracs+17	;note - local blt will work here!
+	tmsg	< at user PC >
+;print PC in octal
+	move	a,erracs+0	;AC 0 was the PC
+	xmovei	t,(a)		;this strip non-address bits no matter
+				;what mode we are in
+	movei	a,.priou
+	hlrz	b,t		;get section #
+	jumpe	b,errs0.	;jump if section 0
+	movx	c,<8>		;radix
+	nout%
+	 jfcl			;too late for error handling
+	tmsg	<,,>
+errs0.:	movei	a,.priou
+	hrrz	b,t
+	movx	c,<<6B17>!no%zro!8> ;full six digits
+	nout%
+	 jfcl
+;go to debugger if there is any
+	hrrz	c,.jbddt	;[3] LOAD PASDDT-ADDR
+	jumpe	c,noddt		;[3] no .jbddt, maybe vmddt
+	move	c,.jbddt	;[3] want left half, too
+	tloe	c,-1		;[3] if zero, it is PASDDT
+	 jrst	decddt		;[3] if not, real DDT
+;PASDDT
+	call	-1(c)		;[3] go to pasddt special entrance
+	jrst	errest		;continue if he continues
+
+;nothing obvious - check for VM DDT or just halt
+noddt:	
+ifn klcpu,<
+	move	a,sn.cod	;look for ddt in code section
+	lsh	a,^D9
+	ior	a,[.fhslf,,770]	;[3] no .jbddt, see if 770000
+> ;ifn klcpu
+ife klcpu,<
+	move	a,[.fhslf,,770]
+> ;ife klcpu
+	rpacs%			;[3] page exist?
+	tlne	b,(pa%pex)	;[3]
+	 tlnn	b,(pa%ex)	;[3] allowed to execute?
+	  jrst	hlterr		;[3] no - continue
+;DDT
+	xmovei	c,770000	;[3] seems to be ddt - get its addr
+decddt:	movem	t,.jbopc	;save PC so he can continue
+	movem	c,ddtgo
+	tmsg	<
+[Type POPJ 17,$X to continue if possible
+      QUIT$G to close files and exit]
+>
+	move	0,[erracs+1,,1]	;restore ac's to pgm context
+	blt	0,16		;note - local blt ok here too!
+	move	0,erracs
+	call	@ddtgo		;[3] avoid -1 entry point!
+	jrst	errest		;continue if he exits
+
+;no debugger, just halt and let him go on if he dares
+hlterr:	movei	a,.fhslf	;check on reenter dispatch...
+ifndef xgvec%,<opdef xgvec% [jsys 606]>
+	xgvec%			;try release 5 style
+	 erjmp	[gevec%		;too bad, try rel 4
+		hrro	c,b	;address in c
+		hlrz	b,b	;length in b
+		jrst	.+1]
+	caige	b,2		;long enuf for reenter?
+	 tdza	b,b		;no
+	 hrrz	b,1(c)		;get reenter address, if any
+	hrroi	a,[asciz /
+[Type CONTINUE to proceed if possible.]
+/]
+	cain	b,quit		;if user hasn't set his own REE trap
+	 hrroi	a,[asciz /
+[Type CONTINUE to proceed if possible,
+      REENTER to close all files and exit.]
+/]
+	psout%
+	haltf%
+;	jrst	errest
+
+;here to continue if the user really wants to
+errest:	move	0,[erracs+1,,1]
+	blt	0,17		;note - local blt ok here!
+	move	0,erracs
+	ret
+
+;ILFIL. is called when the status is not 314157.  Check for
+; lazy I/O in progress first.  Otherwise error.
+ilfil.::push 	p,t
+	move	t,filtst(b)
+	caie	t,314156	;lazy I/O in progress?
+	jrst	ilfile		;no, real error
+;here if lazy I/O needs to be done
+	push	p,a		;make sure no AC's changed
+	call	@filget(b)	;do the delayed thing
+	movei	t,314157	;set normal status
+	movem	t,filtst(b)
+	pop	p,a
+	pop	p,t
+	ret
+	
+;here for a real error
+ilfile:	errmsg	<Uninitialized file>
+	move	t,(p)	
+	call	runer.
+	xmovei	b,tty		;use tty instead
+	pop 	p,t
+
+INXERR::errmsg	<Array index out of bounds>
+	call	runer.
+	jrst	@t
+
+memfu.:	errmsg	<Memory full>
+	call	runer.
+	ret
+
+PTRER.::errmsg	<Uninitialzed or NIL pointer>
+	call	runer.
+	jrst	@t
+
+SRERR::	errmsg	<Scalar out of range>
+	call	runer.
+	jrst	@t
+
+blktbe:	push	p,t
+	setz	t,		;we don't know the location
+	errmsg	<Too many files open at once>
+	call	runer.
+	pop	p,t
+	ret
+	
+	subttl file openning - top level routines
+
+;ac usage for the file openning routines:
+;	t,a - temporary
+;	b - fcb
+;	c - string (file spec)
+;	d - flags,,length of string
+;	e - protection/interactive
+;	f - gtjfn word or 0
+;	g - openf word or 0
+;	h - bits:
+;	fl%lc	(1)	map lower case
+;	fl%ioe	(2)	handle i/o errors
+;	fl%fme	(4)	handle data format errors
+;	fl%ope	(10)	handle open errors
+;	fl%eol	(20)	show end of line char
+;	fl%buf  (7700)	number of buffers or pages
+;	fl%mod  (770000) I/O type
+;	  fm%byt(1)	bin/bout
+;	  fm%map(2)	pmap
+;	  fm%tty(3)	texti/bout
+;	  fm%nul(4)	popj
+;	  fm%wrd(5)	buffered 36 bit
+;	  fm%chr(6)	buffered logical byte size
+;	  fm%lst	last legal mode
+
+
+;The following define flags we can't let the user play with.  We set
+; flags first by zeroing these and then doing tlc with those we want
+; to set.  This results in the settings needed for the bits listed
+; here, but lets the user clear others that we set by specifying
+; them in his argument.
+gj%reg==gj%flg!gj%sht!gj%jfn!gj%ofg!gj%xtn
+of%reg==of%rd!of%wr!of%ex!of%app
+
+resetf::setz t,0		;eof setting for correct operation
+	call setprm		;initialize fcb
+	txz f,<gj%reg>
+	txc f,<gj%old!gj%flg!gj%sht> ;extra bits for gtjfn
+	trz g,of%reg
+	tro g,of%rd		;extra bits for openf
+	call getjfn
+	call devprm		;device-dependent parameter setting
+	pcall f%open
+	pcall f%ltst		;turn on line number test if appropriate
+	call errchk		;if open errors
+	jrst resetf		;then try again
+	movn c,filcnt(b)	;get count in case record I/O
+	skipn filerr(b)		;any errors in openning?
+	aos fileol(b)		;no - set dummy eoln for interactive begin
+	skipe e			;if interactive
+cpopj:	ret			;that's all
+	jumpn c,@filget(b)	;if record, do a real get for 1st thing
+	jrst @filgln(b)		;if text, readln, to set lazy status
+
+update::setz t,0		;eof setting for correct operation
+	call setprm		;initialize fcb
+	txz f,<gj%reg>
+	txc f,<gj%old!gj%flg!gj%sht> ;extra bits for gtjfn
+	trz g,of%reg
+	tro g,of%rd!of%wr	;extra bits for openf
+	call getjfn
+	call devprm		;device-dependent parameter setting
+	pcall f%open
+	pcall f%ltst
+	call errchk		;errors?
+	jrst update		; yes - try again
+	skipn filerr(b)		;any errors in openning?
+	aos fileol(b)		;no - set dummy eoln for interactive begin
+	ret
+
+rewrit::movei t,1		;eof setting for correct operation
+	call setprm		;initialize fcb
+	txz f,<gj%reg>
+	txc f,<gj%fou!gj%flg!gj%sht> ;extra bits for gtjfn
+	trz g,of%reg
+	tro g,of%wr
+	call getjfn
+	call devprm		;device-dependent parameter setting
+	pcall f%open
+	call errchk		;errors
+	 jrst rewrit		;yes - try again
+	ret
+
+append::movei t,1		;eof setting for correct operation
+	call setprm		;initialize fcb
+	txz f,<gj%reg>
+	txc f,<gj%old!gj%flg!gj%sht> ;extra bits for gtjfn
+	trz g,of%reg
+	tro g,of%app
+	call getjfn
+	call devprm		;device-dependent parameter setting
+	pcall f%open
+	call errchk		;errors?
+	jrst append		;yes - try again
+	ret
+	subttl rename and delete
+
+rename::push p,filjfn(b)	;save old jfn
+	push p,b
+	push p,c
+	movsi c,(co%nrj)	;close but leave jfn
+	call doclos
+	pop p,c
+	pop p,b
+	setzm fileof(b)		;assume it is OK
+	setzm filerr(b)		;so getjfn works
+	txz f,<gj%reg>
+	txc f,<gj%fou!gj%flg!gj%sht>
+	call getjfn		;get new jfn
+	skipe filerr(b)		;if error, stop now
+	jrst rener1
+	move h,b		;protect fcb and put where doope wants
+	pop p,a			;old jfn
+	tlz a,-1
+	hrrz b,filjfn(h)	;new jfn
+	rnamf%
+	 erjrst rener		;[7]
+	ret
+
+rener:	hrrzm a,filerr(h)	;this is error code
+	aos fileof(h)		;set eof
+	ret
+
+rener1:	movei a,1
+	movem a,fileof(h)	;set eof
+	ret
+
+delf.::	push p,filjfn(b)
+	push p,b
+	push p,c
+	movsi c,(co%nrj)
+	call doclos
+	pop p,c
+	pop p,b
+	setzm fileof(b)
+	setzm filerr(b)
+	pop p,a
+	hrli a,(df%nrj)		;keep the jfn
+	move h,b		;where rener needs it
+	delf%
+	 erjrst rener		;[7]
+	ret
+	subttl low level routines for file openning
+
+;AC usage for setprm:
+;	t - at entry, this is normal setting of eof
+;	a - length of file component, 0 if text
+;	b - fcb pointer
+;	c - addr of file spec
+;	d - flags,,length of file spec
+;	e - 0 or 1 - interactive flag; more commonly - new funny option string count
+;	h - flags
+;	bix - address of new option string (was rh of e)
+;	t,a garbaged
+
+;setprm handles all device-independent file-openning stuff,
+;including initializing the fcb so all entries are valid for I/O.
+;In case of error, filerr is set, so the caller had better check
+;this.  Byte size and I/O routines are left for devprm, as they
+;are device-dependent.
+
+setprm:
+;First we make sure we have a valid FCB
+	push p,t
+	move t,filtst(b)
+	caie t,314157		;magic word will be there if it is legal
+	 call initz.		;not - init it
+	push p,a
+	push p,c
+	movsi c,(co%nrj)	;assume we use existing jfn
+	skipn d			;unless new file spec
+	skipge (p)		;or request to get spec from tty
+	setz c,			; then full close
+	call doclos		;close file if one already open
+		;becaue of code above, this also releases the jfn
+		;and zeros filjfn if the user gave us a new file spec
+	pop p,c
+	pop p,a
+	pop p,t
+;We do any format conversions before saving away the values
+	came e,[exp -1]		;-1 or 0 LH is probably old format
+	 tlnn e,777777
+	  caia			;old format
+	   call	option		;new format  parse options
+	skipe e			;if interactive
+	trz h,fl%lzy		;clear lazy flag
+;now save values in case of restart. Note that format conversions won't be
+;redone in case of restart since LH(e) is now 0, and h is not longer -1
+	movem f,filsvf(b)	;save args for error recovery
+	movem g,filsvg(b)	;  h is also saved, below - e is not touched
+	movem t,fileof(b)	;put in a few args
+	trc t,1			;this is the eof to set if errors
+	movem t,filbad(b)
+	movnm a,filcnt(b)	;filcnt wants negative count
+;the following code is intended to set both H and FILFLG to
+; H*(-20) + FILFLG*20.
+	trz h,fl%tmp		;H * (-20)
+	exch h,filflg(b)	;reverse them so we can play with FILFLG
+	andi h,fl%tmp		;FILFLG * 20
+	iorb h,filflg(b)	;both _ H * (-20) + FILFLG * 20
+;here we figure out which character table to use
+	setz a,0		;assume no lc map, standard EOL treatment
+	trne h,fl%lc		;if lc mapping on
+	 tro a,2			;set bit 2
+	trne h,fl%eol		;if we want to see EOL char
+	 tro a,1			;set bit 1
+ifn klcpu,<
+	hrlz t,sn.cod		;get section number
+	skipe t			;if it is non-zero
+	tlo t,(<a>B5)		;then put indexing on left end
+	skipn t			;if it is zero
+	tlo t,(1B0!<a>B17)	;then put indexing in IFIW place and make IFIW
+> ;ifn klcpu
+ife klcpu,<
+	movsi t,(1B0!<a>B17)
+> ;ife klcpu
+	hrr t,[exp norchx,norcht,lcchx,lccht](a) ;get the right table
+	movem t,filcht(b)
+;now random initialization
+	xmovei a,filcmp(b)
+	movem a,filptr(b)
+	move a,[ascii /-----/]	;initial line number
+	movem a,fillnr(b)
+	setzm filerr(b)		;now zero things
+	setzm fileol(b)
+	setzm fillts(b)
+	setzm filcmp(b)		;zero first word of component
+	push p,c
+	xmovei c,filcmp(b)	;get address of component
+	skipg a,filcnt(b)	;zero the component
+	 setzm (c)
+	aoj c,			;to next
+	aojl a,.-2
+	pop p,c
+;;;ifn oldcom,<
+ifn klcpu,<
+	hlrz a,b		;see if in right section
+	came a,sn.cod
+	 ret			;not in code, can't be TTY or TTYOUT
+> ;ifn klcpu
+	hrrz a,b		;get local part of address
+	caie a,tty		;special for tops-10 tty open, since
+	cain a,ttyout		;args are garbage
+	 jrst opntty
+;;;> ;ifn oldcom
+	ret			;no - done
+
+norcxp:	ifiw norchx(a)
+norchp:	ifiw norcht(a)
+
+;e - LH - count
+;bix - addr (was rh of e)
+option:	push p,t
+	push p,a		;get some working space
+	push p,b
+	hlrz a,e		;a _ count
+	setz e,			;e is now one of the AC's we are setting up
+ifn klcpu,<
+	movx t,<point 7,(bix)>
+> ;ifn klcpu
+ife klcpu,<
+	movx t,<point 7,>
+	hrr t,bix
+> ;ife klcpu
+	jumpe a,optend
+optlop:	ildb b,t		;b _ next char
+	caie b,"/"		;use / to separate options
+	 jrst opterr		;error
+	sojle a,opterr		;count /, there had better be letter following
+	ildb b,t		;b _ option letter
+	soj a,			;count the letter
+	caile b,140		;if lower case
+	subi b,40		;make it upper
+	cail b,optmin		;if below first
+	caile b,optmax		;or above last
+	 jrst opterr		;error
+	xct opttab-optmin(b)	;appropriate processing routine
+	jumpg a,optlop		;if any more char's, get next
+optend:	pop p,b			;exit
+	pop p,a
+	pop p,t
+	ret
+
+optmin="B"
+opttab:	call optbyt		;B - byte size
+	jrst opterr		;C - undef
+	tro h,fl%ioe		;D - data trans errors
+	tro h,fl%eol		;E - show eoln
+	tro h,fl%fme		;F - data format errors
+	jrst opterr		;G - undef
+	jrst opterr		;H - undef
+	movei e,1		;I - set interactive flag
+repeat "M"-"J",< jrst opterr>	;J to L - undef
+	call optmod		;M - mode
+	jrst opterr		;N - undef
+	tro h,fl%ope		;O - open errors
+repeat "S"-"P",< jrst opterr>	;P to R - undef
+	call numbuf		;S - buffer size
+	jrst opterr		;T - undef
+	tro h,fl%lc		;U - lower to upper
+optmax=="U"
+
+optmod:	call optdec		;parse a decimal number
+	lsh b,^D12		;shift it to mode position
+	or h,b			;and or into flags
+	ret
+
+numbuf:	call optdec		;parse decimal
+	trne b,777		;any odd words?
+	addi b,1000		;yes - round up pages
+	lsh b,^D-9		;pages
+	lsh b,6			;shift into page count
+	or h,b
+	ret
+
+optbyt:	call optdec		;parse a decimal number
+	lsh b,^D30		;shift it to the byte position
+	or g,b			;and or into open bits
+	ret
+
+optdec:	push p,c
+	push p,d
+	sojle a,opterd		;count colon, better be an extra after that
+	ildb b,t
+	caie b,":"
+	 jrst opterr
+	setz c,			;accumulate number in c
+optdcl:	ildb b,t
+	cail b,"0"
+	caile b,"9"
+	 jrst opterd
+	subi b,"0"
+	imuli c,^D10
+	add c,b
+	sojle a,optdcx		;count digit, if end of string, done
+	move d,t		;peek at next
+	ildb b,d
+	caie b,"/"		;if /, this is end
+	 jrst optdcl		;really get char
+optdcx:	move b,c		;return value in b
+	pop p,d
+	pop p,c
+	ret
+
+opterd:	pop p,d
+	pop p,c
+	pop p,(p)
+opterr:	move b,a		;save a
+	errmsg	<Error in option string>
+	move t,-4(p)		;-2 for saved args, -2 because called 2 deep
+	call runer.
+	jrst optend		;return from OPTION
+
+;;;ifn oldcom,<
+;There are only two legal states: interactive or lazy.  There are however
+;several cases:
+;  at initial program start, one of two cases:
+;	no flags - want to force interactive - old compiler or new one tty:/
+;	lazy - want to treat as lazy - this is new compiler default
+;  in a user call to RESET
+;	no flags - want to force interactive - this is the old compiler
+;	interactive only - leave interactive - this is old compiler
+;	lazy - want to treat as lazy - this is new compiler default
+;	lazy, interactive - treat as interactive - this is new compiler
+;first normalize the lazy and interactive flags
+;  above, we clear lazy if interactive set, so lazy, interactive is right
+;  lazy only and interactive only are already right
+;  only have to adjust no flags case, to force interactive
+opntty:	jumpn e,.+3		;if neither interactive
+	 trnn h,fl%lzy		;nor lazy set
+	 movei e,1		;set interactive
+	hrli t,ttynt		;[13] copy special tty dispatch table
+	hrri t,filr11(b)	;[13]   since rest of open won't be done
+	blt t,filr99(b)		;[13] local blt is ok here!
+	pop p,(p)		;we will want to exit from caller
+	skprea			;if writing
+	 ret			;we are done
+	aos fileol(b)		;now set up for interactive case, dummy eoln
+	skipe e			;if interactive, that's all
+	ret
+	move a,ttynt+lazygt	;else set up for lazy readln
+	hrrm a,filgln(b)
+	jrst @filgln(b)		;and go do initial get
+;;;> ;ifn oldcom
+;AC usage for devprm
+;	b - fcb
+;	g - openf word
+;	h - used internally for dvchr flags
+;	t,a,c,h garbaged, g updated
+
+;devprm sets up device-dependent parameters in the fcb, mainly
+;byte size and I/O routines.
+
+devprm:	skipe filerr(b)		;no-op if error already
+	ret
+	move h,b		;save fcb over dvchr call
+	hrrz a,filjfn(b)
+	dvchr%
+	 erjmp doope
+ifn tenex,<push p,a>		;[7] save designator in case of tty
+	exch h,b		;result of dvchr to h, fcb to b
+;now we set up proper device/function dependent table
+	ldb a,[fl%mod!filflg(b)];get user specified mode
+	caig a,fm%lst		;unimplemented gets default
+	jumpn a,devfnd		;if he gave one, use it
+	movei a,fm%byt		;else, byte I/O is default
+	hlrz h,h		;get dv%typ field
+	andi h,(dv%typ)		;code from here to devfnd sets
+	cain h,.dvdsk		;   a to Pascal mode
+	movei a,fm%map
+	cain h,.dvtty
+	movei a,fm%tty
+	cain h,.dvnul
+	movei a,fm%nul
+	cain h,.dvmta
+ife tenex,<movei a,fm%mta>
+ifn tenex,<movei a,fm%wrd>
+	caie h,.dvcdr
+	cain h,.dvlpt
+	movei a,fm%chr
+devfnd:	
+
+ifn tenex,<			;[7] if tty, see if ours
+	cain a,fm%tty		;[7] tty mode?
+	call devtty		;[7] yes, turn to fm%chr if not ctrl term
+	adjstk p,-1		;[7] a was saved
+> ;ifn tenex
+
+	movsi t,070000		;default byte size
+	skipge filcnt(b)	;except for record I/O
+	movsi t,440000		;default is 36
+	tlnn g,(of%bsz)		;if user defaulted it
+	ior g,t			;then use our default
+;special entry for mtaopn
+setdsp:	subi a,1		;now set dispatch vector per a
+	lsh a,1			;a _ (a - 1) * 2
+	skipge filcnt(b)	;if record I/O,
+	addi a,1		;use second column in table
+ifn klcpu,<
+	skipe sn.cod		;XBLT if extended
+	jrst [	movei t,filr99-filr11+1
+		move a,devtab(a)	;address of disp vec from table
+		move c,lazygt(a)	;get lazy READLN routne addr
+		push p,b
+		xmovei b,filr11(b)	;place to put it in FCB
+		xblt t,
+		pop p,b
+		move t,filflg(b)	;need to look at a flag
+		trne t,fl%lzy		;if lazy
+		hrrm c,filgln(b)	;use lazy READLN routine
+					;[LH is set to section number]
+		ret]
+> ;ifn klcpu
+	hrl t,devtab(a)		;get address of disp. vec. from table
+	hrri t,filr11(b)	;whre to copy vector
+	blt t,filr99(b)		;local blt ok here!
+	move t,filflg(b)	;need to look at a flag
+	trnn t,fl%lzy		;if lazy
+	ret			;not, done
+	move a,devtab(a)	;get lazy READLN routine
+	move a,lazygt(a)
+	movem a,filgln(b)	;and use it as READLN
+	ret
+
+ifn tenex,<	;[7] 
+
+;this code is to see whether a tty is the controlling terminal.
+;  If so, we use pstin.  Otherwise, you get the losing BBN type mode.
+
+devtty:	push p,b
+	hrroi a,[asciz /TTY/]	;get designator for own tty
+	stdev
+	 jrst [adjstk p,-3
+	       jrst doope]
+	movei a,fm%tty		;assume ours
+	came b,-2(p)		;compare with dev designator saved
+	movei a,fm%byt		;not ours, use bin/bout
+	pop p,b
+	ret
+
+> ;ifn tenex [7] ^^
+
+;here is the table of dispatch vectors
+
+	;text,	record
+
+fm%mta==0   ;pseudo-mode that sets defaults after looking at label type
+
+;the following entries are here to make it easy to find all device
+;  dispatch tables, so the init code can put the section numbers in the LH.
+;  they are not used by DEVPRM.
+devst:	adrs <ttynt, protob+filget>
+	adrs <erropt, unop>
+
+	adrs <mtatxt, mtarec>
+devtab:	adrs <byttxt, bytrec>
+	adrs <maptxt, maprec>
+	adrs <ttytxt, ttyrec>
+	adrs <nultxt, nulrec>
+	adrs <wrdtxt, wrdrec>
+	adrs <chrtxt, chrrec>
+	adrs <rectxt, recrec>
+deven:
+
+;here are the tables referred to in the matrix
+
+;	byte-size,getch,putch,getln,putln,close,dispatch
+;	getx,putx,putpage,setpos,curpos,init,open,break,lintst
+;	showln,fixln,lazy-getln
+
+lazygt==21	;offset of lazy-getln routine
+
+byttxt:	adrs <getchx,putchx,getlnx,putlnx,0,.+1>
+	adrs <illfn,illfn,putpgx,setpbx,curpbx,cpopj,openfi,cpopj,cpopj>
+	adrs <showln,notry,getlnz>
+bytrec:	adrs <getbx,putbx,illfn,illfn,0,.+1>
+	adrs <getxbx,putxbx,illfn,setpbx,curpbx,bxini,bxopn,cpopj,cpopj>
+	adrs <showln,notry,illfn>
+maptxt:	adrs <getchd,putchd,getlnx,putlnx,dskclo,.+1>
+	adrs <illfn,illfn,putpgx,dskspo,dskcpo,dskbri,dskopn,dskbrk,dsklts>
+	adrs <showln,notry,getlnz>
+maprec:	adrs <getd,putd,illfn,illfn,dskclo,.+1>
+	adrs <getxd,putxd,illfn,dskspo,dskcpo,dskbri,dskopn,dskbrk,cpopj>
+	adrs <showln,notry,illfn>
+ttytxt:	adrs <getcht,putchx,getlnx,putlnx,0,.+1>
+	adrs <illfn,illfn,putpgx,setpt,curpt,ttyini,tdvopn,cpopj,cpopj>
+	adrs <tdvshl,tdvfxl,getlnz>
+ttyrec==bytrec	;not sure this is right.  What is record I/O on tty?
+nultxt:	adrs <simeof,cpopj,simeof,cpopj,0,.+1>
+	adrs <illfn,illfn,cpopj,nulspo,retzer,cpopj,openfi,cpopj,cpopj>
+	adrs <showln,notry,simeof>
+nulrec:	adrs <simeof,cpopj,illfn,illfn,0,.+1>
+	adrs <simeof,cpopj,illfn,nulspo,retzer,cpopj,openfi,cpopj,cpopj>
+	adrs <showln,notry,illfn>
+wrdtxt:	adrs <getchb,putchb,getlnx,putlnx,logclo,.+1>
+	adrs <illfn,illfn,putpgx,illfn,retneg,logini,wrdopn,logclo,wrdlts>
+	adrs <showln,notry,getlnz>
+wrdrec:	adrs <getb,putb,illfn,illfn,logclo,.+1>
+	adrs <getxb,illfn,illfn,illfn,retneg,logini,wrdopn,logclo,cpopj>
+	adrs <showln,notry,illfn>
+chrtxt:	adrs <getchb,putchb,getlnx,putlnx,logclo,.+1>
+	adrs <illfn,illfn,putpgx,setpb,curpb,logini,chropn,logclo,cpopj>
+	adrs <showln,notry,getlnz>
+chrrec:	adrs <getb,putb,illfn,illfn,logclo,.+1>
+	adrs <getxb,illfn,illfn,setpb,curpb,logini,chropn,logclo,cpopj>
+	adrs <showln,notry,illfn>
+rectxt:	adrs <getcx,putcx,getlx,putlx,logclx,.+1>
+	adrs <illfn,illfn,putpx,illfn,retneg,loginx,chropx,logclx,cpopj>
+	adrs <showln,notry,getlz>
+recrec:	adrs <getbxr,putbxr,illfn,illfn,0,.+1>
+	adrs <illfn,illfn,illfn,setpbx,curpbx,bxini,bxopn,cpopj,cpopj>
+	adrs <showln,notry,illfn>
+mtarec:
+mtatxt:	adrs <notop,notop,notop,notop,0,.+1>
+	adrs <notop,notop,notop,notop,notop,cpopj,mtaopn,cpopj,cpopj>
+	adrs <notop,notop,notop>
+
+
+;The following table is used for tty and ttyout.  It is set up by pasif.
+
+ttynt:	adrs <gettty,puttty,getlnx,putlnx,0,.+1>
+	adrs <illfn,illfn,putpgx,illfn,illfn,ttyini,cpopj,cpopj,cpopj>
+	adrs <ttyshl,ttyfxl,getlnz>
+
+;The following table is used after an error
+erropt:	adrs <cpopj,cpopj,cpopj,cpopj,0,.+1>
+	adrs <cpopj,cpopj,cpopj,cpopj,cpopj,cpopj,cpopj,cpopj,cpopj>
+	adrs <cpopj,notry,cpopj>
+
+;The following is used for unopened files:
+
+unop.:
+unop:	adrs <notop,notop,notop,notop,0,.+1>
+	adrs <notop,notop,notop,notop,notop,cpopj,cpopj,cpopj,cpopj>
+	adrs <notop,notop,notop>
+
+; Openfi is called by the device-dependent openner, f%open.
+;   For simple devices, f%open can simply point to openfi.
+
+;openfi just does an openf - pretty straight-forward
+;	b - fcb, must be saved and restored
+;	g - openf word
+;	garbages a,h
+
+openfi:	skipe filerr(b)		;no-op if error already seen
+	ret
+	move h,b		;save fcb pointer
+	hrrz a,filjfn(h)	;set up args for openf - jfn
+	move b,g		;openf word
+	openf%
+	 erjrst doope		;[5]
+	move b,h		;restore fcb
+	ret
+
+oper:	move h,b		;error in openfi
+doope:	movei a,.fhslf		;current process
+	geter%
+	hrrz a,b		;error in RH only
+smoper:	move b,h		;restore fcb - entry if error is known
+	movem a,filerr(b)	;save error for user
+	move a,filbad(b)	;set bad fileof
+	movem a,fileof(b)
+	movem a,fileol(b)
+ifn klcpu,<
+	skipe sn.cod		;extended?
+	jrst [	movei t,filr99-filr11+1
+		xmovei a,erropt
+		push p,b
+		xmovei b,filr11(b)
+		xblt t,
+		pop p,b
+		ret]
+> ;ifn klcpu
+	hrli t,erropt		;and set up to get error if we try more I/O
+	hrri t,filr11(b)
+	blt t,filr99(b)		;local blt ok here!
+	move t,filflg(b)
+	ret			;caller will process error later
+
+errchk:	skipn filerr(b)		;error?
+	jrst erchOK		;no
+	move t,filflg(b)	;yes - is he enabled?
+	trne t,fl%ope
+	jrst erchOK		;yes - then that's OK, too
+;here if an error we are supposed to handle
+	move d,b
+	call erp		;print error message
+	move b,d
+	tmsg <Try another file spec: >
+	movn a,filcnt(b)	;restore state, without filespec - a has size
+	setz c,			;  or zero if text ;;no filespec
+	movsi d,(op%tty)	;but ask for it from tty
+	move f,filsvf(b)
+	tlo f,(gj%cfm)		;confirm it from tty
+	move g,filsvg(b)
+	move h,filflg(b)
+	ret			;error return
+;here for no error or one we don't care about
+erchOK:	aos (p)
+	ret			;OK - skip return
+
+;getjfn - AC usage
+;	b - fcb pointer - must be saved and restored
+;	c - string
+;	d - flags,,string length
+;	f - gtjfn word
+;	h - used to save p or h
+;	klobbers t,a,c,d,h,bix
+
+;getjfn gets a jfn if necessary.    In case of
+; error, it sets of filerr, so the user better check!
+
+getjfn:	skipe filerr(b)		;should be a no-op if previous error
+	ret
+	tlze d,(op%wld)		;set up for wild cards if requested
+	 tlo f,(gj%ifg)
+	tlze d,(op%tty)		;if user asked for spec from tty, get it
+	 jrst ttyspc
+	jumpn d,havspc		;if ascii spec, use it
+	skipe filjfn(b)		;otherwise, if jfn already exists, use it
+	ret
+;here if no spec and no existing jfn - this is an internal file, we have
+;to gensym a name.  Also, we set fl%tmp so it gets deleted upon exit of
+;the lexical scope in which it was created.
+;The name we make is of the form PAS-INTERNAL.26001234;T   where 26001234 is
+;the address of the FCB in octal (for debugging, and for uniqueness)
+	movei t,fl%tmp		;set temp flag
+	iorm t,filflg(b)
+	move h,p		;h _ saved copy of p
+ife klcpu,<hrri p,10(p)>	;advance stack to get space for new name
+ifn klcpu,<adjsp p,10>		;advance stack to get space for new name
+	move t,b		;save b, will be restored in makspx
+ifn klcpu,<movx a,<point 7,1(h)>>
+ife klcpu,<
+	movei a,1(h)
+	hrli a,(point 7,)
+> ;ife klcpu
+	hrroi b,[asciz/PAS-INTERNAL./]
+	clear c,
+	sout%
+	move b,t		;use full address of FCB
+	move c,[^D10,,8]	;6 digits, octal
+	nout%
+	 jfcl
+	hrroi b,[asciz/;T/]
+	clear c,
+	sout%
+makspr:	move a,f		;a _ flags
+ifn klcpu,<movx b,<point 7,1(h)>> ;[46] b _ ptr to stack copy
+ife klcpu,<
+	movei b,1(h)
+	hrli b,(point 7,)
+> ;ife klcpu
+	gtjfn%
+	 erjrst makspe		;[5]
+	jrst makspx		;finished making spec
+;If this is an internal file, we want to be able to read or update it
+;even if it doesn't exist.  So, if the OLD bit is on, we will clear it
+;(and set the WRITE bit for openf), and try again.  If that doesn't
+;help, there is something more serious wrong.
+makspe:	tlnn f,(gj%old)		;did he ask for old file?
+	 jrst specer		;no - nothing we can do
+	tlz f,(gj%old)		;yes - enable for writing
+	tro g,of%wr		;also openf bits
+	jrst makspr		;retry this way
+
+;here if the user gave us a spec.
+havspc:	movei t,fl%tmp		;[37] a new file spec - clear temp from old one
+	andcam t,filflg(b)
+	move t,b		;t _ saved copy of b
+	move h,p		;h _ saved copy of p
+	move bix,c		;address of name
+	movni c,(d)		;-length
+	move a,e		;save e
+	idivi d,5		;get # words
+	move e,a		;restore e
+ifn klcpu,<
+	adjstk p,1(d)		;reserve the space on the stack
+	movx a,<point 7,1(h)> ;where to copy the string
+	movx b,<point 7,(bix)> ;where the string is now
+> ;ifn klcpu
+ife klcpu,<
+	addi p,1(d)
+	movei a,1(h)
+	hrli a,(point 7,)
+	movx b,<point 7,>
+	hrr b,bix
+> ;ife klcpu
+	sout%			;copy the ASCII string to ASCIZ
+	move a,f		;a _ flags
+ifn klcpu,<movx b,<point 7,1(h)>> ;[46] b _ ptr to stack copy
+ife klcpu,<
+	movei b,1(h)
+	hrli b,(point 7,)
+> ;ife klcpu
+	gtjfn%
+	 erjrst	specer		;[5]
+makspx:	move b,t		;restore ac's
+	move p,h
+	movem a,filjfn(b)	;return new jfn
+	ret
+
+ifn tenex,< ;[5]
+byttab:	point 7,0		;[5]
+	point 7,0,6		;[5]
+	point 7,0,13		;[5]
+	point 7,0,20		;[5]
+	point 7,0,27		;[5]
+> ;[5] ifn tenex
+
+specer:	move a,t		;get error recovery flag
+	move a,filflg(a)
+	trne a,fl%ope		;if he wants to handle errors,
+	jrst [move b,t		;let him - first restore AC's
+	      move p,h
+	      jrst oper]
+;special error printer needed for this routine, because main one
+;uses jfns, but we don't have a file spec yet
+;note that we are still in a funny context, where p and b are odd
+	errmsg	< >
+	movei a,.priou
+	hrloi b,.fhslf
+	setz c,
+	erstr%
+	 jfcl
+	 jfcl
+	tmsg < - >
+ifn klcpu,<movx a,<point 7,1(h)>> ;file spec the user gave
+ife klcpu,<
+	movei a,1(h)
+	hrli a,(point 7,)
+> ;ife klcpu
+	psout%
+	tmsg <
+Try another file spec: >
+	move b,t		;restore to standard AC's
+	move p,h
+	tlo f,(gj%cfm)		;confirm spec from tty
+	;jrst ttyspc		;and get spec from tty
+
+ttyspc:	move h,b		;h _ saved copy of b
+	movei a,fl%tmp		;clear temp flag, as this is new spec
+	andcam a,filflg(b)
+ttyspl:	move a,f		;a _ flags
+	tlo a,(gj%fns)
+	move b,[.priin,,.priou]
+	gtjfn%
+	 erjrst ttyspe		;[5]
+	move b,h
+	movem a,filjfn(b)	;return new jfn
+	ret
+
+ttyspe:	errmsg	< >
+	movei a,.priou
+	hrloi b,.fhslf
+	setz c,
+	erstr%
+	 jfcl
+	 jfcl
+	tmsg	<
+Try another file spec: >
+	jrst ttyspl
+
+	subttl global entries to I/O routines
+
+;In order to use the routines in PASNUM, get and put must obey the
+;following AC usage conventions:
+;	t,a	- temps
+;	b up	- must be preserved in character code.  In
+;		  record code, the AC's above b seem to be free.
+
+get.::	jrst @filget(b)		;get is odd because it is also a jsys
+getch==get.
+put::	jrst @filput(b)
+putch==put
+getln::	jrst @filgln(b)
+putln::	jrst @filpln(b)
+putpg::	vcall f%putp
+
+setpos::vcall f%setp
+curpos::vcall f%curp
+getx.::	vcall f%getx
+putx::	vcall f%putx
+
+retzer:	setzm 1(p)		;returns zero - used for device nul
+	ret
+
+retneg:	setom 1(p)
+	ret
+
+;setpos for nul:.  no-op, except in read mode if GET not suppressed,
+;it simulates EOF.
+nulspo:	jumpn d,nulspx		;if get suppression, no-op
+	skprea			;if write mode, no-op
+nulspx:	ret			;no-op
+	jrst simeof		;else simulate GET
+
+;RELF. is RCLOSE.  It not only does RELCL., but also releases the
+;BLKTAB entry for the FCB.  This is to prevent BLKTAB from becoming
+;a limiting factor on the number of FCB's we can have.
+relf.::	call relcl.		;[260] close, releasing
+	hrrz a,filblk(b)	;[260] any blktab entry?
+	jumpe a,relf1		;[260] no - impossible
+	setzm blktab(a)		;[260] remove blktab entry
+	setom blklck(a)		;[260] and clear the lock
+relf1:	setzm filtst(b)		;[260] require full reinit next time
+	ret			;[260]
+
+resdev::movsi c,(cz%abt!co%nrj)	;this is DISMISS - the tops10 resdv.
+	jrst clochk
+relcl.::tlza c,(co%nrj)		;here to close and release
+clofil::tlo c,(co%nrj)		;this is CLOSE - keep the jfn
+clochk:	move a,filtst(b)	;if the file isn't init'ed
+	caie a,314157
+	call initz.		;then do it
+doclos:		;We now assume that if there is a non-zero jfn, that is a
+		;valid jfn.  SETPRM is thus coded to defend against garbage
+		;jfn's.  But if a user calls this, he should beware.
+	;warning: only a and t are free.  Be sure the filclo routine knows that
+		;c - close bits
+	setz a,0		;do mode-dependent clean-up
+	exch a,filclo(b)
+	skipe a			;  if 0, no routine
+	call (a)
+	move t,filjfn(b)	;close file
+	jumpe t,clofb		;if no jfn, nothing to close
+  ;if we are killing the jfn, special cleanups may be needed
+	tlne c,(co%nrj)		;if asked to kill the jfn, do so
+	jrst clonk		;don't kill jfn
+  ;beginning of special cleanups for releasing jfn
+	setzm filjfn(b)		;clear all record of it
+	move a,filflg(b)	;get flags
+	trnn a,fl%tmp		;if temp file
+	jrst clonk		;  not temp, done with it
+;Now, all cases go either to the following code for temp files,
+;or to clonk, for closing without killing.
+  ;temp file - releasing implies deleting
+	hrrz a,t		;delete instead of just closing
+	hrli a,(co%nrj)		;first we must close it
+	closf%
+	 chkquo
+	 erjrst clorl		;couldn't close it - just release it
+	hrli a,(df%exp)		;now delete, expunge, and release it
+	delf%
+	 erjrst clorl		;couldn't - just release it
+	jrst clofb		;done with this jfn
+
+  ;normal file - close it without killing it, using bits from c
+clonk:	hrrz a,t
+	hll a,c
+	closf%
+	 chkquo			;[27]
+	 erjrst .+2		;[7]  close failed, release instead
+	jrst clofb		;  close worked, go on
+	tlne c,(co%nrj)		;don't release if asked not to!
+	jrst clofb
+	hrrz a,t
+clorl:	rljfn%
+	 chkquo			;[27]
+	 erjrst clofb		;[7]  release failed too, no hope
+
+;All cases join here, even after "impossible" combinations of errors
+clofb:	movei a,0		;clean up buffers if any
+	exch a,filbuf(b)
+	jumpe a,clof2		;  none- done
+	push p,b		;demap the page
+	push p,a		; since may have been doing pmap I/O on it
+ife tenex,<
+	hlrz c,a		;count in rh of c
+	hrrz b,a		;[46] page no.
+	hrli b,.fhslf		;in this process
+	seto a,			;clear the page
+	hrli c,(pm%cnt)		;do all at once
+	pmap%
+	 chkquo			;[27]
+	 erjmp .+1		;no errors here, please
+> ;ife tenex
+ifn tenex,<
+	hlrz t,a		;count of pages to be released
+	hrr b,a			;first page #
+	hrli b,.fhslf		;in this process
+	seto a,			;clear the page
+	setz c,
+clof1l:	pmap%
+	addi b,1		;next page
+	sojg t,clof1l		;if any
+> ;ifn tenex
+	pop p,a			;restore target page
+	call relpg.		;put it in free list
+	pop p,b
+clof2:	
+ifn klcpu,<
+	skipe sn.cod		;XBLT if extended
+	jrst [	movei t,filr99-filr11+1
+		xmovei a,unop		;address of disp vec from table
+		push p,b
+		xmovei b,filr11(b)	;place to put it in FCB
+		xblt t,
+		pop p,b
+		ret]
+> ;ifn klcpu
+	hrli t,unop		;[12] now mark file as no longer open
+	hrri t,filr11(b)	;[12] so future accesses get error
+	blt t,filr99(b)		;[12] local blt ok here!
+	ret
+
+break::	vcall f%brk		;force out buffers
+
+breaki::push p,c
+	push p,b
+	move a,[ascii /-----/]	;old line no. no longer valid
+	movem a,fillnr(b)
+	pcall f%init		;use buffer filler if any
+	pop p,b
+	pop p,e			;suppress get flag
+	jrst posnoc		;clear buffer var and do get if needed
+
+nextfi::movsi c,(co%nrj)	;go to next wildcard file - must be closed
+	call doclos
+	move a,filjfn(b)
+	gnjfn%
+	 jrst nonext
+	movem a,1(p)		;if succeed, return flags (always nonzero)
+	ret
+
+nonext: move d,b
+	movei a,.fhslf		;nextfi failed, see why
+	geter%
+	andi b,-1		;get error code only
+	caie b,gnjfx1		;if anything except ran out of files
+	 jrst nonxt1		;it is a real error
+	move b,d
+	setzm 1(p)		;bad return
+	setzm filjfn(b)		;they released our jfn (naughty folks)
+	ret
+
+nonxt1:	call ioer		;a real error
+	setzm 1(p)		;still give bad return
+	ret
+	subttl device-independent routines for error recovery
+
+;showln - this is the default showln for devices where we can't
+;  really show the current line.
+showln:	push p,a
+	push p,c
+	push p,d
+	tmsg <[Error at character number >
+	call curpos		;get current position
+	push p,b
+	movei a,.priou
+	move b,1(p)		;returned value
+	movei c,^D10		;in decimal
+	nout%
+	 jfcl
+	tmsg	<]
+>
+	pop p,b
+	pop p,d
+	pop p,c
+	pop p,a
+	ret	
+
+;notry - use this routine for FIXLIN with devices where you don't
+; implement retrying.
+notry:	tmsg	<Call to READ>
+	call	runer.
+	tmsg	<
+[Skipping bad character]
+>
+	jrst @filget(b)
+
+;tryagn - ask him to try again.  If there is a debugger, offer to
+; go to it.
+;t - PC to print if error; A - jfn for printing; B - FCB
+tryagn:	push p,t
+	push p,a
+	push p,b
+	push p,c
+tryag1:	
+;Now, if DDT is there, do a bit differently
+	skipe .jbddt			;.jbddt?
+	jrst tryddt			;yes - that is fine
+ifn klcpu,<
+	move a,sn.cod			;else look for VMDDT in our section
+	lsh a,^D9
+	ior a,[.fhslf,,770]		;else look for VMDDT
+> ;ifn klcpu
+ife klcpu,<
+	move a,[.fhslf,,770]
+> ;ife klcpu
+	rpacs%				;page exist?
+	move a,-2(p)
+	tlnn b,(pa%pex)			;
+	jrst trynod			;no - continue
+	tlnn b,(pa%ex)			;allowed to execute?
+	jrst trynod			;no - continue
+;Here if DDT - give him an option
+tryddt:	move a,-2(p)
+	hrroi b,[asciz /
+[Try again, from the beginning of the bad number.]
+[Or type D to enter the debugger.]
+/]
+	setz c,
+	sout%
+	move b,-1(p)		;get back FCB
+	call @filget(b)
+	move a,filcmp(b)	;See if he typed a D
+	caie a,"D"
+	cain a,"d"
+	 caia
+	jrst tryOK		;no a D - use what he gave us
+;Here if he wants DDT - let runer. do it
+	move t,-3(p)		;PC passed to us in T
+	tmsg <Call to READ >
+	call runer.
+	pcall f%init		;clear input buffer again
+	jrst tryag1
+
+;Here for no DDT cases
+trynod:	move a,-2(p)
+	hrroi b,[asciz /
+[Try again, from the beginning of the bad number.]
+
+/]
+	setz c,
+	sout%
+	move b,-1(p)
+	call @filget(b)		;just get a char
+tryOK:	pop p,c
+	pop p,b			;return it to the user
+	pop p,a
+	pop p,t
+	ret
+	
+	subttl pmap I/O - ascii top-level routines
+
+;put
+putchd:	aos a,filcby(b)		;advance current byte
+	camle a,fillby(b)	;beyond end seen so far?
+	movem a,fillby(b)	;yes - update it
+	sosge filbct(b)		;room in buffer?
+	 call @filadv(b)	;no - next
+	move a,filcmp(b)	;put it in
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	idpb a,filbpt(b)
+	 ercal maperr
+	ret
+
+noput:	move d,b		;error routine if not open for write
+	movei a,iox2		;write priv req
+	movem a,filerr(d)
+	jrst erp.
+
+;This routine is called when we get an error upon attempting access
+; to a page.  It makes assumes that the caller uses the following
+; sequence:
+;	aos filcby(b)
+;	sos filbct(b)
+;	idpb a,filbpt(b)
+;	 ercal maperr
+; as it will undo the sideeffects of these operations if necessary.
+; When a hole is found, we just have to set a to zero after clearing
+;	the page.
+; But on a real error, we have to back out all the operations shown
+;	and abort the caller.
+
+maperr:	
+;for tops-20 the most likely thing here is that we tried to read a
+;  hole in the file. Tops-20 gives an ill mem read in that case. 
+;Also, it may be quota exceeded.
+;So the code comes in these pieces:
+;  diagnose it - hole in the file?
+;  if a hole, then give a zero page
+;  else, print an error message and back out of the I/O operation
+
+	push p,(p)		;make room for 2-word PC 
+	push p,b		;see if page exists
+;First see if we have a quota problem
+	push p,a
+ifn klcpu,<
+	skipe sn.cod		;SFM is illegal except in non-zero section
+	sfm a
+	tlo a,020000		;set first part done, as ILDB was interrupted
+	movem a,-3(p)
+> ;ifn klcpu
+repeat 1,<  ;This is due to a monitor bug.
+	movx a,<point 7,a>	;do an ILDB to clear first part done
+	ildb a,a		;since ERCAL may leave it set
+> ;repeat 1
+	movei a,.fhslf		;see what error
+	geter%
+	tlz b,777777		;b _ error code
+	cain b,iox11		;if quota error
+	 jrst mapquo		;special handling
+	pop p,a
+;here we check to see if the page is perhaps nonexistent in the file
+;if so, we treat it as zeros.  
+	move b,0(p)		;[35] get back FCB
+ife tenex,<
+	hrrz a,filbpt(b)	;addr of core page
+	add a,filbix(b)
+	lsh a,-9		;convert to page
+	hrli a,.fhslf		;in out fork
+	rpacs%
+	 erjmp maper3		;treat this as an I/O error
+;The case we are looking for is read-only access and an indirect pointer
+	tlnn b,(pa%wt)		;if have write access, not this problem
+	tlnn b,(pa%ind)		;if indirect too, that is it
+	 jrst maper3		;write access or not indirect: normal error
+  ;here if it is a hole.  clear the page
+maper1: move b,a		;b _ .fhslf,,core page no.
+	seto a,			;clear page
+	push p,c
+	setz c,			;no counts
+	pmap%
+	 chkquo			;[27]
+	 erjmp maper2		;can't clear page
+	pop p,c
+	pop p,b
+	setz a,			;return zero byte
+	pop p,-1(p)		;we just need to PC word of the pair
+	ret
+> ;ife tenex
+ifn tenex,<
+	jrst maper3
+> ;ifn tenex
+
+;here if is a quota error, to retry
+mapquo:	push p,c
+;error message
+	errmsg	< Quota exceeded or disk full at >
+	movei	a,.priou
+	sos -3(p)		;adjust ret addr to go back to idpb
+	sos b,-3(p)
+ifn klcpu,<
+	skipn sn.cod		;if not extended addressing,
+>;ifn klcpu
+	 tlz b,-1		; get rid of flags
+	movei c,8		;base 8
+	nout%
+	 jfcl			;not sure how to handle errors here
+	tmsg <
+[Find some space, then type CONTINUE]>
+; Finally we are ready to restore to the user's context and continue,
+; if user types CONTINUE
+	pop p,c
+	pop p,a
+	pop p,b
+	haltf%			;let him delete some files
+	adjstk p,-2
+ifn klcpu,<
+	skipe sn.cod
+	xjrstf 1(p)
+> ;ifn klcpu
+	jrstf @2(p)		;must use jrstf to restore first part done
+
+ife klcpu,<printx Using KL instruction (ADJBP) at QUOBPT+>
+;If you want to use a non-KL DEC-20, you will have to write a routine to
+;simulate adjbp.  It must be able to handle any byte size.
+
+;here is the beginning of the true error code.
+maper2:	pop p,c
+maper3:	pop p,b
+	sos filcby(b)		;move back
+	aos filbct(b)
+
+ifn klcpu,< ;[5]
+	movni a,1
+	adjbp a,filbpt(b)
+	movem a,filbpt(b)
+> ;[5] ifn klcpu
+
+ife klcpu,< ;[5] start
+;****** Tenex hackers, note:  this code assume byte size = 7, not always true.
+	sos filbpt(b) 
+repeat 4,<ibp filbpt(b)>
+> ;[5] end ife klcpu
+
+	adjstk p,-2		;abort caller
+	jrst ioerp
+
+;get
+getchd:	aos a,filcby(b)		;advance current byte
+	camg a,fillby(b)	;beyond eof?
+	 jrst getcd1		;no - do normal input
+dskeof:	sos filcby(b)		;yes - don't do the advance
+	;jrst simeof
+
+;simeof - simulate eof for pmap, texti (etc.?)
+simeof:	move t,filbad(b)	;yes - set eof
+	movem t,fileof(b)
+	movem t,fileol(b)
+	skipl filcnt(b)		;if ascii
+	setzm filcmp(b)		;clear buffer, for read/ln
+	movei t,iox4		;simulate monitor eof error code
+	movem t,filerr(b)
+	ret
+
+getcd1:	sosge filbct(b)		;count bytes left in this buffer
+	 call @filadv(b)	;none - get new buffer
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	ildb a,filbpt(b)	;get character
+	 ercal maperr
+	hrrz t,filbpt(b)
+ifn klcpu,<
+	add t,bix
+> ;ifn klcpu
+	move t,@t
+	tdne t,fillts(b)	;was it a line no.?
+	 jrst getcln		; yes
+	andi a,177		; no - be sure legal ascii
+	jumpe a,getchd		;ignore nulls
+	move a,@filcht(b)	;get eoln flag and mapped char
+	hlrem a,fileol(b)	;put down eoln flag
+	hrrzm a,filcmp(b)	;put down mapped char
+	came a,[-1,," "]	;carriage return in official mode
+	 ret
+geteol:	call @filget(b)		;we have a CR, look for real EOL
+	skipe fileof(b)		;stop after errors
+	 ret
+	skipg fileol(b)		;real EOL?
+	 jrst geteol		;no, next char
+	ret			;yes, done
+
+define letter,<exp .-beg>	;real letter
+define lc,<exp .-beg-40>	;upper case equiv. of lower case letter
+define linech(x),<x,,.-beg>	;end of line char
+
+norcht::
+beg==norcht
+repeat 12,<letter>	;0 - 11
+	linech 1	;12
+	letter		;13
+	linech 1	;14
+	linech -1	;15
+repeat 14,<letter>	;16 - 31
+	linech 1	;32
+	linech 1	;33
+repeat 3,<letter>	;34 - 36
+
+ifn tenex,<linech 1>	;37
+ife tenex,<letter>	;37
+
+repeat 162,<letter>	;everything else is a letter
+
+lccht:
+beg==lccht
+repeat 12,<letter>
+	linech 1
+	letter
+	linech 1
+	linech -1
+repeat 14,<letter>
+	linech 1
+	linech 1	;33
+repeat 3,<letter>	;34 - 36
+
+ifn tenex,<linech 1>	;37
+ife tenex,<letter>	;37
+
+repeat 101,<letter>	;40 - 140
+repeat 32,<lc>		;141 - 172
+repeat 5,<letter>	;173 - 177
+
+;
+;Now the tables for standard pascal semantics - replace EOLN by space
+;
+define linech(x),<x,," ">	;end of line char
+;otherwise the tables are the same
+norchx::
+beg==norchx
+repeat 12,<letter>	;0 - 11
+	linech 1	;12
+	letter		;13
+	linech 1	;14
+	linech -1	;15
+repeat 14,<letter>	;16 - 31
+	linech 1	;32
+	linech 1	;33
+repeat 3,<letter>	;34 - 36
+
+ifn tenex,<linech 1>	;37
+ife tenex,<letter>	;37
+
+repeat 162,<letter>	;everything else is a letter
+
+lcchx:
+beg==lcchx
+repeat 12,<letter>
+	linech 1
+	letter
+	linech 1
+	linech -1
+repeat 14,<letter>
+	linech 1
+	linech 1	;33
+repeat 3,<letter>	;34 - 36
+
+ifn tenex,<linech 1>	;37
+ife tenex,<letter>	;37
+
+repeat 101,<letter>	;40 - 140
+repeat 32,<lc>		;141 - 172
+repeat 5,<letter>	;173 - 177
+
+;called by get to skip line no.
+getcln:	movem t,fillnr(b)	;save it for user
+	aos filbpt(b)		;skip it
+	movei t,5		;update currentposition
+	addm t,filcby(b)
+	movni t,5		;note getchb already skipped one char, so
+	addb t,filbct(b)	; we only skip 5
+	jumpge t,getchd		;now get real character
+;the context in which filadv is valid is where we have just done sosge filbct,
+;and are about to do ildb.  Usually this is right, as in the subtraction of
+;5 above, 1 of the 5 is in the new block.   so that is the sosge.  we will
+;still have to do an ibp afterwards, though.  If we are further into the
+;word than the first char, we now back up, since filadv will leave us at
+;the start of the buffer (and its error handling is predicated on the
+;assumption that we are working on the first char)
+	addi t,1		;if more than one char into new buffer
+	addm t,filcby(b)	;move back (T is negative)
+	call @filadv(b)		;go to new buffer
+	ibp filbpt(b)		;pass over first char (tab)
+	jrst getchd		;now go back for real char
+	subttl pmap I/O - buffer advance and go to new page
+
+;dskadv - get to the next page when reading sequentially.  If
+; the getpage succeeds, this gives new byte ptr, count, etc., for
+; the new page.  Otherwise you are left exactly where you were before,
+; with filcby adjusted, since the caller is assumed to have
+; incremented it.
+;	t,a - temps
+;	b up - preserved
+dskadv:	move t,filpag(b)	;old page
+	addi t,1		;new page
+	call getfpg		;get page routine
+	 jrst badadv		;can't get new page
+	move t,filbfs(b)	;bytes in buffer
+	subi t,1		;caller has done sosge
+	movem t,filbct(b)
+	move t,filbfp(b)	;pointer to start of buffer
+	movem t,filbpt(b)
+	ret
+
+badadv:	sos filcby(b)		;user has done aos on this
+	pop p,(p)		;abort our caller
+	ret
+
+;getfpg - get specified page 
+;	t - desired page - preserved
+;	a - temp
+;	b up - preserved
+;  returns:  t - requested disk page
+;    also resets 
+;	filbfp(RH) to point to the core page where the disk page is mapped
+;	filpag to indicate we are on a new file page
+;	filbgp if we have to remap the buffer, to indicate new beginning
+;    the user is assumed to adjust counts, pointers, etc., as he likes
+
+getfpg:	move a,t		;a _ desired page
+	sub a,filbgp(b)		;a _ pages beyond start of buffer
+	cail a,0		;if before buffer start
+	caml a,filpgb(b)	;or after buffer end
+	 jrst getfpn		;need new pages
+  ;here when desired page is in buffer
+ife klcpu,<
+	push p,t
+	hrrz t,filbuf(b)
+	add a,t
+	pop p,t
+> ;ife klcpu
+	lsh a,9			;convert to address offset
+	hrrm a,filbfp(b)	;save as current buffer start
+	movem t,filpag(b)	;also remember we are now where asked
+	jrst cpopj1
+
+  ;here when desired page is not in buffer
+getfpn:	push p,c		;filadv routine for pmap I/O
+	push p,b
+	hrr a,t			;desired page
+	hrl a,filjfn(b)		;on this file
+
+ife tenex,<
+	hlr c,filbuf(b)		;c _ page count for buffer
+	hrli c,(pm%cnt!pm%rd!pm%wr!pm%pld) ;say we have a count, preload
+	hrrz b,filbuf(b)	;[46] first page of buffer
+	hrli b,.fhslf		;current process
+	pmap%
+	 chkquo			;[27]
+	 erjmp badpag
+> ;ife tenex
+
+ifn tenex,<
+	push p,d		;d will be page count
+	hlrz d,filbuf(b)
+	movsi c,(pm%rd!pm%wr)
+	hrrz b,filbuf(b)	;[46] first page of buffer
+	hrli b,.fhslf		;this process
+getfpl:	pmap%			;one page only
+	addi a,1		;go to next page
+	addi b,1
+	sojg d,getfpl		;and do it if desired
+	pop p,d
+> ;ifn tenex
+
+ ;general success return
+gotpag:	pop p,b
+	movem t,filpag(b)	;only now can we say are on that page
+	movem t,filbgp(b)	;and that page is buffer begin
+ifn klcpu,<
+	hllzs filbfp(b)		;and current page is first in buffer
+> ;ifn klcpu
+ife klcpu,<
+	hrrz c,filbuf(b)	;and current page is first in buffer
+	lsh c,^D9		;convert to address
+	hrrm c,filbfp(b)
+> ;ifn klcpu
+	pop p,c
+cpopj1:	aos (p)			;skip return - success
+	ret
+
+;note that badpag is called with j,b&c saved on stack
+badpag:	pop p,b			;we don't change filpag, as haven't moved
+	pop p,c
+	jrst ioerp		;gives non-skip (error) return
+	subttl pmap I/O - actual I/O routines for record files
+
+;The following routines set up C to indicate the desired
+; transfer, and then call getdlp or putdlp, which simulate
+; sin and sout.  If an I/O error occurs, getdlp or putdlp
+; will return with c and d as at the point of error.  Thus the
+; caller may have some adjustments to do.  We are violating the
+; standards by not preserving D.  We conjecture that this is safe
+; when working with non-text files, as these routines are called
+; directly from user code or at the end of other routines, right
+; before returning to the user.
+
+;get
+getd:	movem c,fillct(b)	;assume no. transferred = no. requested
+	movn c,c		;c -number to be transferred
+	xmovei d,filcmp(b)	;a - starting address
+	call getdlp		;sin
+	addm c,fillct(b)	;adjust assumption
+	ret
+
+;put
+putd:	movem c,fillct(b)
+	movn c,c
+	xmovei d,filcmp(b)
+	call putdlp		;sout
+	addm c,fillct(b)
+	ret
+
+;getx
+getxd:	move t,c		;requested upper limit
+	sub c,fillct(b)		;c _ no. needed this time
+	movn c,c		;make aobjn word
+	xmovei d,filcmp(b)
+	add d,fillct(b)		;adjust by no. already done
+	movem t,fillct(b)	;and say (optimistically) we have done all this
+	call getdlp		;sin
+	addm c,fillct(b)
+	ret
+
+;putx
+putxd:	move c,filcby(b)	;go back to beginning of record
+	sub c,fillct(b)		;c _ byte at beginning
+	call dskmov		;move to beginning of record
+	 ret			;no - I/O error in setpos
+	move c,fillct(b)	;get back no. to transfer
+	jrst putd		;now put out the record
+
+;Here are the sin/sout simulations.  Note that if there is
+; an I/O error, filadv will sos filcby(b) and abort the routine.
+; In that case c will be left negative, and the caller (above)
+; will do the right thing.
+;	C - negative count
+;	D - transfer address
+
+;sin
+getdlp:	aos a,filcby(b)		;assume we are going to a new byte
+	camle a,fillby(b)	;beyond eof?
+	 jrst dskeof		;simulate eof
+	sosge filbct(b)		;anything left in buffer?
+	 call @filadv(b)	;no - next buffer - may abort here
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	ildb a,filbpt(b)
+	 ercal maperr
+	movem a,(d)
+	aoj d,
+	aojl c,getdlp
+	ret
+
+;sout
+putdlp:	aos a,filcby(b)		;assume we are going to a new byte
+	camle a,fillby(b)	;beyond eof?
+	 movem a,fillby(b)	;update eof
+	sosge filbct(b)
+	 call @filadv(b)
+	move a,(d)
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	idpb a,filbpt(b)
+	 ercal maperr
+	aoj d,
+	aojl c,putdlp
+	ret
+	subttl pmap I/O - device dependent openning
+
+;main entry to do openfi
+dskopn:	skipe filerr(b)		;must be no-op if error in jfn
+	ret
+	xmovei t,dskadv		;disk advance routine
+	movem t,filadv(b)
+	ldb t,[point 6,g,5]	;get byte size
+	move a,t		;a _ byte size
+	lsh t,^D24		;put in byte size position
+ifn klcpu,<
+	tlo t,bix		;put (bix) into byte pointer
+> ;ifn klcpu
+	movem t,filbpt(b)	;in pointer
+	tlo t,440000		;byte pointer LH
+	hllm t,filbfp(b)	;RH set up later (may be already)
+	movei t,^D36		;compute no. of bytes in a page
+	idiv t,a		;t _ no. of bytes/word
+	lsh t,9			;t _ no. of bytes/page
+	movem t,filbfs(b)	;save as public knowledge
+;here we have to split according to the sort of open being done
+	trne g,of%app		;special code to simulate append
+	jrst dskapp
+	trnn g,of%rd		;special code if write-only
+	jrst dskwrt
+;read or update - must be able to read, so pmap always works
+	trne g,of%wr		;if only read
+	jrst dskop1		; not - ignore this
+  ;read only
+	xmovei t,noput		;disable writing
+	movem t,filput(b)
+	xmovei t,dskrcl		;use special close (doesn't change size)
+	movem t,filclo(b)
+  ;read or update again
+dskop1:	call openfi
+	skipe filerr(b)		;this may fail
+	 ret
+	call sizefi		;set up end of file stuff
+	jrst dskini
+;write only
+dskwrt:	call openfi
+	skipe filerr(b)
+	 ret
+ife tenex,<
+	hrrz a,filjfn(b)	;see if we can read, too
+	move h,b
+	gtsts%
+	 erjmp doope
+	tlnn b,(gs%rdf)
+	jrst dskbn1		;can't read it, use normal binary mode
+	move b,h
+> ;ife tenex
+	setzm fillby(b)		;file is now zero length
+	jrst dskini
+
+;here to exit to normal binary routines in case can't use pmap.  DEC
+;requires read priv's to do pmap, although tenex doesn't
+
+ife tenex,<
+dskbn1:	move b,h
+	hrr a,filjfn(b)		;It's open - close it
+	hrli a,(co%nrj)
+	closf%
+	 erjrst oper		;[7]
+> ;ife tenex
+
+dskbin:
+ifn klcpu,<
+	skipe sn.cod		;XBLT if extended
+	jrst [	push p,b
+		movei t,filr99-filr11+1
+		xmovei a,chrtxt	;change to normal mode
+		skipge filcnt(b)
+		xmovei a,chrrec
+		xmovei b,filr11(b)
+		xblt t,
+		pop p,b
+		jrst chropn]
+> ;ifn klcpu
+	hrli t,chrtxt		;change to normal mode
+	skipge filcnt(b)
+	hrli t,chrrec
+	hrri t,filr11(b)
+	blt t,filr99(b)		;local blt ok here!
+	jrst chropn		;now open in real mode
+
+;append simulation
+dskapp:	trc g,of%app!of%rd!of%wr
+	call dopenf		;try read/write open
+	 jrst appbin		;failed, so try real append
+	call sizefi		;find end of file
+	skipe filerr(b)		;it can fail
+	 ret
+	call dskini
+	move c,fillby(b)	;go to end
+	setz d,			;suppress get
+	jrst dskspo
+;here to ext to normal binary routines in case can't append using pmap
+appbin:	trc g,of%app!of%rd!of%wr
+	jrst dskbin
+
+;here to do openf for dskapp - needs special routine so we don't
+; trigger error processing if it fails.
+dopenf:	move h,b		;save b
+	hrrz a,filjfn(h)
+	move b,g
+	openf%
+	 erjrst cpopjh		;[5]
+	aos (p)			;good return
+cpopjh:	move b,h		;bad return
+	ret
+
+;These are common initializations that must not be done until
+;we know the open succeeded
+dskini:	setzm filbct(b)
+	setom filpag(b)
+	movni t,377777		;force us to get new page
+	movem t,filbgp(b)
+	setzm filcby(b)
+	ldb a,[fl%buf!filflg(b)] ;number of buffers user wants
+	caig a,0		;must be between 1 and 36
+	 movei a,mapbfs		;if 0, use default
+	caile a,^D36		;if too big, use maximum
+	 movei a,^D36
+	movem a,filpgb(b)	;save as buffer size in pages
+	call alcbuf		;# pages is arg to alcbuf, in A
+ifn klcpu,<
+	hllzs filbfp(b)		;LH was set up at beginning
+> ;ifn klcpu
+ife klcpu,<
+	move t,filbuf(b)
+	hrrm t,filbfp(b)
+> ;ifn klcpu
+	ret
+
+;alcbuf - allocation a page as a buffer - used elsewhere, too
+;  a - number of pages to allocate
+alcbuf:	hlrz t,filbuf(b)	;any buffer already?
+	jumpe t,alcbfn		;no, get a new one
+	camn t,a		;yes, right size?
+	 ret			;yes, nothing to do
+	push p,a
+	move a,filbuf(b)	;no, throw it away
+	call relpg.
+	pop p,a
+alcbfn:	call getpg.		;get a new buffer
+	movem a,filbuf(b)	;[46] store size,,page#
+	tlz a,-1
+	lsh a,9
+	movem a,filbix(b)	;store start address of buffer
+ife klcpu,<
+	hrrm a,filbpt(b)
+> ;ife klcpu
+	ret
+
+ife srisw,<  ;[23]
+;Here is the normal code for turning on the line number test.
+;It turns it on for all text files with byte size 7.  If there
+;are no line numbers in the file, of course everything is fine.
+
+;This routine is considered device-dependent, since it is called only
+;for devices capable of having line numbers.  For other devices, the
+;test is simply CPOPJ, which leaves the test bit (FILLTS) 0.  This
+;disables the test.  This distinction is just for safety, though
+;presumably such devices wouldn't have line numbers anyway.
+
+wrdlts:
+dsklts:	ldb t,[point 6,filbfp(b),11] ;get byte size
+	move g,filsvg(b)	;[47] and get back flags
+	txnn g,of%pln		;[47] if user wants us to pass line numbers
+	caie t,7		;or if not 7
+	 ret			;can't be line numbered
+	aos fillts(b)		;is line number - set fillts
+	ret
+>  ;[23] ife srisw
+
+ifn srisw,< ;[23]
+;This code is because SRI's EMACS puts random low-order bits into
+;files.  Thus we have to test the first word of the file to see if
+;it is a line number, and turn off testing if not.
+
+;xxxlts - device-dependent routine to see if this is a line-numbered
+;  file.  Only devices that read full words have such a routine.  Others
+;  use CPOPJ, which results in fillts still being zero for them.  Error
+;  processing is a big pain in the neck, since we really want to save
+;  eof and errors for the first real read.  So we generally have to
+;  bypass the normal I/O routines.  These routines depend upon the fact
+;  that a line numbered file must begin with a line number.  We have to
+;  enforce this since EMACS tends to create things that look like line
+;  numbers by setting the low order bit randomly throughout the file.
+dsklts: setz t,0		;get page 0 of file
+	move g,filsvg(b)	;[47] and get back flags
+	txne g,of%pln		;[47] if user wants us to pass line numbers
+	 ret			;[47] then forget it
+	skiple fillby(b)	;[17] if file is zero size, not numbered
+	call getfpg
+	 ret			;if can't get page 0,not numbered
+	setom filpag(b)		;pretend we didn't read the page
+	hrrz a,filbfp(b)	;get address of first word
+ifn klcpu,<
+	add a,filbix(b)
+> ;ifn klcpu
+	move t,(a)		;get first word
+	 erjmp cpopj		;if error, not linenumbered
+;comlts - entry for testing line number.  first byte of file in t
+comlts:	ldb a,[point 6,filbfp(b),11] ;get byte size
+	trze t,1		;if low order bit off or
+	caie a,7		;if not 7
+	 ret		;can't be line numbered
+	camn t,[ascii /     /]	;this is a page mark
+	jrst isnum		;which is OK to start the file
+	movei a,5		;otherwise must be digits
+	movx	c,<point 7,t>	;get from t
+comlt1:	ildb d,c		;next digit
+	cail d,"0"		;if not digit
+	caile d,"9"
+	 ret		;isn't a line number
+	sojg a,comlt1		;go back for next
+isnum:	aos fillts(b)		;is line number - set fillts
+	ret
+> ;[23] ifn srisw
+
+
+
+	subttl pmap I/O - device-dependent routines
+
+;break
+dskbrk:	skipge filbgp(b)	;break function - force out buffer
+	ret
+	move a,filbuf(b)	;count,,buf addr
+	move d,b		;save fcb
+	hrrz b,a		;[46] page no.
+	hrli b,.fhslf		;in this process
+ife tenex,<
+	hlrz c,a		;count in rh of c
+	seto a,			;clear the page
+	hrli c,(pm%cnt)		;do all at once
+	pmap%
+	 chkquo			;[27]
+	 erjmp ioer		;no errors here, please
+> ;ife tenex
+ifn tenex,<
+	hlrz t,a		;count of pages to be released
+	seto a,			;clear the page
+	setz c,
+dskbrl:	pmap%
+	addi b,1		;next page
+	sojg t,dskbrl		;if any
+> ;ifn tenex
+	move b,d
+	ret
+
+;close for read-only modes
+dskrcl:	push p,c		;special close that doesn't change size
+	push p,d
+	jrst dskcl1
+
+;breakin
+dskbri:	setzm filbct(b)		;breakin function - clear buffer
+	setom filpag(b)
+	movni t,377777		;force us to get new page
+	movem t,filbgp(b)
+	setzm filcby(b)
+	setzm fillct(b)
+	ret
+
+;close for read/write modes
+dskclo:	push p,c
+	push p,d		;filclo allows only t and a free
+	push p,b		;now we will reset the eof pointer
+ifn tenex,<hrli a,.fbbyv>		;the offset - byte size
+ife tenex,<hrli a,400000!.fbbyv>	;same, suppress updating disk copy
+	hrr a,filjfn(b)
+	move c,filbpt(b)
+	hrlzi b,007700		;mask
+	chfdb%
+	 erjmp .+1		;if not open for output, ignore
+	move b,(p)		;restore b
+	hrli a,.fbsiz		;no. of bytes
+	hrr a,filjfn(b)
+	move c,fillby(b)
+	seto b,			;all bits
+	chfdb%
+	 erjmp .+1
+	pop p,b
+dskcl1:	call dskbrk		;close - force last buffer
+	pop p,d
+	pop p,c
+	ret
+
+;This doesn't belong here, is called by open
+sizefi:	move h,b		;compute last byte no.
+	hrrz a,filjfn(h)
+	move b,[2,,.fbbyv]
+	xmovei c,b		;put b _ byte size, c _ bytes in file
+	gtfdb%			;get from fdb
+	 erjmp doope
+	ldb t,[point 6,filbpt(h),11]	;t _ our byte size
+	ldb a,[point 6,b,11]	;a _ file's byte size
+	cain a,0		;[2] if zero
+	 movei a,^D36		;[2] use 36 to prevent divide by 0
+	camn a,t
+	jrst sambsz		;if same, use exact calculation
+;[44] new algorithm that gets exact sizes if at all possible
+;different byte sizes.  First we figure the number of completely filled
+;words.  Then if not an even number of words, we handle the last,
+;partially filled word separately.  The object is to avoid rounding up
+;if possible.
+	push p,e		;resetf needs e preserved
+	movei d,^D36
+	idiv d,a		;d - file bytes/wd
+	idiv c,d		;c - number of full words, d - extra file bytes
+	imul d,a		;d - extra bits in last word
+	move e,t		;e - our byte size
+	movei t,^D36		;t - our bytes per word
+	idiv t,e
+	imul t,c		;t - our bytes in full words
+	idiv d,e		;d - extra bytes of our size in last wd
+				;e - extra bits beyond those bytes
+	add t,d			;t - our bytes due to full words and extra
+				;    bytes in last word
+	skiple e		;any bits not yet counted?
+	addi t,1		;yes - say one more byte
+	move c,t		;c - final result - bytes in file
+;[44] end of new algorithm
+	pop p,e
+sambsz:	movem c,fillby(h)
+	move b,h
+	ret
+	subttl pmap I/O - random access
+
+;setpos
+dskspo: move e,d		;e _ suppress get flag
+	call dskmov		;go where asked to
+	 ret			;error return
+posdon:	setzm fillct(b)		;old transfers now irrelevant
+	skipe a,filerr(b)	;clear eof unless due to real error
+	cain a,iox4
+	 jrst .+2		;if no error or eof, clear eof
+	jrst posnoc		; other error, don't clear
+	move t,filbad(b)
+	trc t,1
+	movem t,fileof(b)	;clear pascal eof
+	setzm filerr(b)		;and error code
+;here to do implied get, or clear buffer
+;B - file
+;E - suppress get
+posnoc:	movn c,filcnt(b)	;set up arg for binary get if needed
+	setzm filcmp(b)		;now at new place
+	xmovei c,filcmp(b)	;get address of component
+	skipg a,filcnt(b)	;zero the component
+	 setzm (c)
+	aoj c,			;to next
+	aojl a,.-2
+	move a,filbad(b)	;1 if input, 0 if not
+	movem a,fileol(b)	;dummy eol since nothing there
+	skpwrt			;if open for write, or
+	 skipe e		;if interactive
+	  ret			;that's all
+	movn c,filcnt(b)	;set up arg for binary get if needed
+	jrst @filget(b)		;now do the get
+
+;dskmov - internal routine to move to new place
+dskmov:	caige c,0		;if less than zero
+	 move c,fillby(b)	;use end of file
+	push p,c		;save desired byte
+	idiv c,filbfs(b)	;c _ pages, d _ bytes off in page
+	move t,c		;req. page goes in t
+	call getfpg		;go to that page
+	 jrst dskspf		;failed - leave things unchanged
+	pop p,filcby(b)		;we are now at requested place
+	move a,filbfs(b)	;compute bytes left in page
+	sub a,d
+	movem a,filbct(b)	;and leave in counter
+ife klcpu,< ;[5] start
+	movei t,^D36
+	ldb a,[point 6,filbfp(b),11] ;byte size
+	idiv t,a		;t _ byte / wd
+	move c,d
+	idiv c,t		;c _ words, d _ bytes
+	add c,filbfp(b)		;c _ pointer adjusted by words
+	jumpe d,.+3		;loop to adjust c by bytes
+	ibp c
+	sojg d,.-1
+	movem c,filbpt(b)	;store as current byte
+> ;ife klcpu 
+ifn klcpu,< ;[5] end
+	adjbp d,filbfp(b)	;get pointer to the requested place
+	movem d,filbpt(b)
+> ;ifn klcpu
+	aos (p)			;good (skip) return
+	ret
+
+dskspf:	pop p,(p)		;fail return, restore stack
+	ret
+
+dskcpo:	move a,filcby(b)
+	movem a,1(p)		;just return current byte pt.
+	ret
+	subttl actual I/O routines for text files on ascii devices
+
+;getchx is the normal ascii input routine
+getchx:	setzm fileol(b)
+	hrrz a,filjfn(b)
+	push p,b
+getcx1:	bin%
+	 erjmp ioerb
+	jumpe b,getcx1		;ignore nulls
+	movei a,(b)
+	pop p,b			;a _ char, b _ fdb
+getchr::andi a,177
+	move a,@filcht(b)
+	hlrem a,fileol(b)
+	hrrzm a,filcmp(b)
+	came a,[-1,," "]	;if CR in standard Pascal mode
+	ret
+	jrst geteol		;then search for real EOL
+
+;putchx is the normal ascii output
+putchx:	hrrz a,filjfn(b)
+	push p,b
+	move b,filcmp(b)
+	bout%
+	 chkquo
+	 erjmp ioerb
+	pop p,b
+	ret
+
+ioerbc:	pop p,c
+ioerb:	pop p,b
+	jrst ioerp
+	subttl I/O routines for tty and ttyoutput
+
+;note that this is a variable because it has to be reset during
+; interrupt handling
+
+gettty:	sosge filbct(b)		;type ahead left?
+	 call ttyadv		; no - get more
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	ildb a,filbpt(b)	;get next char
+	 jumpe a,gettty		;ignore null
+	jrst getchr		;standard ascii processor
+
+ttyadv:	
+ifn klcpu,<
+	movx a,<point 7,(bix)>
+	move bix,filbix(b)
+> ;ifn klcpu
+ife klcpu,<
+	movx a,<point 7,>
+	hrr a,filbix(b)
+> ;ife klcpu
+	push p,b
+	push p,c
+ifn tenex,< ;[5]
+	move b,[exp ttybsz]	;[5] count
+  ifn sumex,<
+	movei c,12		;[7] break on LF
+	pstin			;[5] pstin; [14] SUMEX/IMSSS only!
+	ldb t,a			;[7] get terminator
+	caie t,15		;[7] cr?
+	jrst ttyadn		;[7] no, normal
+	movei t,12		;[7] yes, add lf
+	idpb t,a		;[7]
+	subi b,1		;[7] count it
+  > ;ifn sumex
+
+  ife sumex,<
+     ife pa2040,<
+	call	rdstr		;[14] non SUMEX/IMSSS - simulate INTERLISP ed.
+	printx	assembling non sumex tty i/o routine
+     >
+  > ;ife sumex
+ttyadn:				;[7]
+> ;[5] ifn tenex
+ife tenex&<1-pa2040>,< ;[5]
+	setz c,
+	move b,[exp ttybsz!rd%top] ;break on tops-10 breaks
+   ife pa2040,<
+	rdtty%
+	 chkquo
+	 erjmp ioecbp
+   >
+   ifn pa2040,<
+	call	$$rdtty
+	 jump 16,ioecbp		;erjmp ioecbp
+   >
+> ;[5]
+	hrrz b,b		;loc. left in buffer
+	movei t,ttybsz-1	;total number avail (simulate sos)
+	sub t,b			;adjust for locations left
+	pop p,c
+	pop p,b
+	movem t,filbct(b)
+ifn klcpu,<
+	movx t,<point 7,(bix)>
+	movem t,filbpt(b)
+> ;ifn klcpu
+ife klcpu,<
+	movx t,<point 7,>
+	hrr t,filbix(b)
+	movem t,filbpt(b)
+> ;ife klcpu
+	ret
+
+;TTOCUR - output portion of TTY buffer before current position
+; uses t,a
+; assumes B is FCB
+; returns column position of prev char in C, ILDB ptr to current char in T
+
+ttocur:	
+ifn klcpu,<
+	move bix,filbix(b)
+	movx t,<point 7,(bix)>
+> ;ifn klcpu
+ife klcpu,<
+	movx t,<point 7,>
+	hrr t,filbix(b)
+> ;ifn klcpu
+	setz c,			;c is column counter
+ttocr2:	move a,t		;a _ new copy of byte ptr
+	ibp a			;consider new char
+	camn a,filbpt(b)	;if it is cur char, we are done
+	 jrst ttocr1
+  ;begin safety - prevent infinite loop in case ptr somehow messed up
+	hrrz a,t		;addr from byte ptr
+	caile a,^d50		;within first 50 words of buffer?
+	 jrst ttocr1
+  ;end safety	
+	ildb a,t		;else do a real advance to this char
+	aos c			;and count it
+	pbout%
+	jrst ttocr2		;yes, loop
+
+ttocr1:	push p,b
+	movei a,.priou
+	rfpos%			;RH(b) _ position in line
+	skipe b			;if not terminal, use counted C
+	hrrz c,b		;use position in terminal line
+	pop p,b
+	ret
+
+;TTYSHL - Show the entire current line, with an arrow under the
+;  current position.  No sideeffects.
+;expects b to be set up
+ttyshl:	push p,t
+	push p,a
+	push p,c
+  ;put out the line
+	psout%
+	call ttocur		;put out start of line
+	move a,t		;now put out cur and rest of line
+	psout%
+  ;now put out a line with ^ under cur pos
+    ;crlf unless old line ended in one
+	movei a,.priou		;see where we are now on line
+	push p,b
+	rfpos%			;probably retype ended in a CRLF
+	hrrz b,b		;b _ current pos on line
+	hrroi a,[asciz /
+/]
+	caile b,1		;if not at beginning
+	 psout%			; then do CRLF
+	pop p,b
+    ;spaces up to the right place
+	movei a," "		;now blanks up to cur pos
+ttshl4:	sojl c,ttshl3		;up to column shown in C
+	pbout%
+	jrst ttshl4
+    ;put out the ^
+ttshl3:				;now caret under cur. pos
+	tmsg	<^
+>
+	pop p,c
+	pop p,a
+	pop p,t
+	ret
+
+;TTYFXL - clear rest of line and ask user for more.
+;expects b to be set up
+;t - PC to print if error msg
+ttyfxl:	call ttyini
+	movei a,.priou
+	jrst tryagn
+	
+ifn tenex,<
+ife sumex,<
+ife pa2040,<
+ ; non SUMEX/IMSSS tty routine...Similar to Sumex/IMSSS PSTIN, i.e.
+ ; corrections by typing a "[" and reverse-echoing characters deleted
+ ; from the string.  First newly-typed character gets a "]" first:
+ ; "this is a mispe[ep]spelling".  However unlike the Sumex code, it
+ ; does not put you into binary mode, and it uses the same breaks as
+ ; RD%TOP, i.e. ^G, ^L, ^Z, ESC, CR, LF.
+ ;   This code is the result of several iterations.  It was originally
+ ; supplied by Sumex, fixed up by DFloodPage at BBN, and finally edited
+ ; by Hedrick.
+
+ ; AC1 contains the string pointer
+ ; AC2 contains the maximum number of bytes to input
+ ; AC0 holds line character count, won't delete if count=0
+ ; Note:  The decrement bytepointer routine frequently sets
+ ;	     Arithmetic Overflow.  Thus, channel 6 is shut off
+ ;	     during RDSTR, and reactivated afterwards
+
+;Uses the following table to tell whether the terminal type is display.
+;The user should make sure it is right for his site.
+
+if1, <printx Be sure to change TRMTAB as appropriate for your site>
+
+;We assume all new terminals are video.  So entry -1, which is used for
+;anything beyond the table is video.  This table is appropriate for
+;Sumex, where 8 and below are hardcopy and above 8 are video, except
+;for 7, which is NVT, which I presume should be treated as hardcopy.
+	exp 1	;default is video
+trmtab: exp 0,0,0,0,0,0,0,0,0
+trmmax=.-1-trmtab
+
+;uses t,c.  a and b are returned.  Others preserved where used.
+
+rdstr:	push	p,b			;save ac2
+	push	p,e			;save ac5
+	push	p,d			;save ac4
+	hlrz	e,a			;get the left half of the pointer
+	move	d,a			;move the whole pointer to d to use
+	cain	e,777777		;implicit bp?
+ifn klcpu,<
+	 hrli	d,(point 7,(bix)) 	;convert to standard bytepointer
+> ;ifn klcpu
+ife klcpu,<
+	 hrli	d,(point 7,)
+> ;ifn klcpu
+;args now set up:
+; t - free, will be count of char's seen, initialized below
+; a - free
+; b - count of free chars in buffer
+; c - free, will be flag bits below, 200000 = echo on, 100000 = display
+; d - byte pointer into buffer
+; e - free
+
+;now set up COC and mode word, saving old on stack
+	move	e,b			;save b in e
+	movei	a,.priou		;get old COC word
+	rfcoc%
+	push	p,b			;save old COC
+	push	p,c
+	tlz	b,(3B3)			;clear echo for ^A
+	tlz	c,(3B1+3B7+3B9+3B11+3B13);clear echo for ^R, ^U, ^V, ^W, ^X
+	sfcoc				;new COC
+	rfmod				;get old RFMOD
+	push	p,b			;save old mode word
+;We have to set break on punct because rubout is a punctuation char on tenex!
+	trz	b,77B23+3B29		;new values for wakeup and mode
+	tro	b,16B23+1B29		;all except alphanum, ASCII mode
+	sfmod				;new mode
+	gttyp
+	caile	b,trmmax		;legal terminal type?
+	 seto	b,			;no - use -1, video
+	setz	c,			;flags to zero
+	skipe	trmtab(b)		;except if display terminal
+	tro	c,100000		;set display flag
+	move	b,e			;restore b
+	push	p,d
+;stack is now:
+;   initial d
+;   mode
+;   COC, c on top
+;   saved d
+;   saved e
+;   initial b
+
+;finish setting up AC's as described above:
+	setz	t,			;init count to 0
+	
+rdstr1:	pbin				;get byte
+	andi	a,177			;[clh] make 7-bit
+	cain	a,"V"-100		;^V to quote
+	 jrst	rdqte
+	cain	a,177			;delete?
+	 jrst	rddel
+	cail	a,40			;characters .ge. 40 are always OK
+	 jrst	rdok			;This is just for speed
+;It is a control character.  We now test its special properties.
+	cain	a,"A"-100		;^A = delete
+	 jrst	rddel
+	cain	a,37			;37 is EOL (quote it to get ^_)
+	 jrst	rdeol
+	caie	a,"U"-100		;^U and
+	cain	a,"X"-100		;^X = delete line
+	 jrst	rddell
+	cain	a,"R"-100		;^R
+	 jrst	rdreds			; redisplay line
+	cain	a,"W"-100		;^W
+	 jrst	rddlwd			; delete word
+	movei	e,1			;now check terminators
+	lsh	e,(a)
+	tdnn	e,[001400,,032200]	;null is right-most bit
+	 jrst	rdok			;not a terminator
+	jrst	rdtrm			;is a terminator
+
+rdeol:	movei	a,15			;treat as CRLF
+	idpb	a,d			;put down the CR
+	soj	b,			;adjust count
+	movei	a,12			;and LF
+	idpb	a,d
+	soj	b,
+	tlz	c,400000		;*clear delete bit, or it gets 
+					;* integer overflow and crashes if you
+					;* hit control-U.
+	jrst	rdtrm1
+
+rdok:	aoj	t,			;increment count
+	idpb	a,d			;put the byte into the string
+	soje	b,rdtrm1		;if all bytes gone, leave
+	jrst	rdstr1
+
+rdqte:	pbin
+	andi	a,177			;[clh]
+	jrst	rdok			;get a quoted character
+
+;delete line
+rddell:	cain	t,0			;at BOLN, nothing to do
+	 jrst	  [movei a,7		;beep
+		   pbout%
+		   jrst rdstr1]
+	tlz	c,400000		;will start new line clean
+	trne	c,100000		;handle display mode
+	jrst 	rpdell
+	tmsg	< XXX
+>
+rxdell:	setz	a,			;null for clearing line
+	move	d,0(p)			;reinit pointer
+	setz	t,			;  count
+	move	b,-6(p)			;  and char's free
+	jrst	rdstr1			;now go for new line
+
+;display version of delete line
+rpdell:	movei	a,15			;bare cr
+	pbout%
+	jrst	rxdell
+
+;retype line
+rdreds:	push	p,t			;put null at the end of string
+	setz	t,			;  here's the null
+	move	a,d			;  here's the end of string
+	idpb	t,a			;  put it there
+	pop	p,t			;and restore things
+	trne	c,100000		;check display
+	jrst	rpreds
+	tmsg	<
+>
+rxreds:	move	a,0(p)			;initial pointer to buffer
+	psout%				;now put it out
+	jrst	rdstr1			;and go back for more
+
+;display version of retype line
+rpreds:	movei	a,15			;bare CR instead of CRLF
+	pbout%
+	jrst rxreds
+
+;delete word
+rddlwd:	cain	t,0			;delete word, error at BOLN
+	 jrst	  [movei a,7
+		   pbout%
+		   jrst rdstr1]
+	movei	a,"_"			;echoes as backarrow
+	trnn	c,100000		;if display, DECBP will delete
+	pbout%				;do it
+;do first char always
+	ldb	a,d			;first char to be deleted
+	call	decbp			;start by deleting a char
+	aoj	b,			;and adjust counts
+	soje	t,rdstr1		;  if run out of char, done
+	call	isanum		;is thing we deleted alphanum?
+	jrst	rdstr1			;no - we are finished
+;do more as long as all alphanum (including first)
+rddlw2:	ldb	a,d			;delete any more?
+	call	isanum		;if alphanum, yes
+	jrst	rdstr1			; not, done
+	call	decbp			;delete
+	aoj	b,			;adjust counts
+	soje	t,rdstr1		;  if run out, done
+	jrst	rddlw2			;otherwise, go back for more
+
+isanum:	caig	a,"z"
+	caige	a,"0"
+	ret				;null-(0    ;  z)-177
+	caige	a,"a"
+	caig	a,"9"
+	 jrst	yesanm			;0 - 9	   ;   a - z
+	caig	a,"Z"
+	caige	a,"A"
+	 ret				;9) - (A   ;   Z) - a(
+yesanm:	aos	(p)			;fall through on A - Z
+	ret
+
+rddel:	cain	t,0
+	 jrst	  [movei a,7		;at "BOLN," don't do a delete
+		   pbout%		;<beep!>
+		   jrst	rdstr1]
+	trne	c,100000		;display mode?
+	jrst	rddel2			;yes, skip this since DECBP deletes
+	ldb	a,d			;echo the preceding character
+	pbout%
+	movei	a,"\"			;and backslash
+	pbout%
+rddel2:	call	decbp			;decrement the bytepointer
+	aoj	b,			;take back that character
+	soj	t,			;and decrement the line count
+	jrst	rdstr1			;get another byte
+
+rdtrm:	idpb	a,d			;the final byte for character .lt. 37
+	tlz	c,400000		;*clear delete bit, or it gets 
+					;* integer overflow and crashes if you
+					;* hit control-U.
+	soj	b,			;read a byte, correct the count
+rdtrm1:	move	t,b			;save b to be returned in t
+					;     a to be returned is in d
+	setz	a,			;stick a null at the end
+	move	b,d
+	idpb	a,b
+;stack is now:
+;   initial d
+;   mode
+;   COC, c on top
+;   saved d
+;   saved e
+;   initial b
+	movei	a,.fhslf
+	movsi	b,(1b6)
+;start restoring things from stack
+	pop	p,(p)			;not needed
+	movei	a,.priou
+	pop	p,b
+	sfmod				;mode
+	pop	p,c
+	pop	p,b
+	sfcoc				;COC
+  ;put in return values before we clobber where they are
+	move	b,t
+	move	a,d
+  ;resume the restoration
+	pop	p,d			;ac's
+	pop	p,e
+	pop	p,(p)			;not needed
+	ret
+
+decbp:	repeat 4,<ibp d>
+	subi d,1
+	trnn	c,100000	;in display mode, also remove from screen
+	ret
+;here to move back on a screen
+	push	p,b
+	push	p,c
+	push	p,d
+	ildb	d,d		;get thing being deleted
+	cail	d,40		;if printable, handle easily
+	jrst	decprt
+;here for control character
+	lsh	d,1		;multiply by 2, since 2 COC bits per word
+	movei	a,.priou
+	rfcoc			;echo depends upon COC words
+	lshc	b,(d)		;shift COC bits to high order end of 2
+	tlnn	b,600000	;if zero, nothing to back over
+	jrst	decdon		;  so done
+	tlnn	b,400000	;if one, ^X
+	jrst	decctx		;  so do ^X
+	cain	d,.chtab	;if tab
+	jrst	redisp		;  I am lazy - redisplay the line
+	tlnn	b,200000	;if two, unknown
+	jrst	redisp		;  so redisplay
+	cain	d,.chesc	;if esc
+	jrst	decone		;  one char
+	jrst	redisp		;else unknown, so redisplay
+
+;here for printable char
+decprt:	cain	d,177		;rubout is not printable
+	jrst	decdon		;  so do nothing
+	caig	d,132		;outside upper case
+	caige	d,101
+	jrst	decone		;it is just one char
+	movei	a,.priou	;upper case - be sure we aren't mapping
+	rfmod
+	trnn	b,tt%uoc
+	jrst	decone		;not mapping - one char only
+	jrst	dectwo		;mapping - two char's
+
+;here for ^X type.  Problem is that upper case when flagging is ^'A, etc.
+decctx:	call	backsp	;backspace for the ^
+	jrst	redisp
+	addi	d,100		;give us the upper case thing after the ^
+	jrst	decprt		;now the char itself
+
+;here when completely confused, to redisplay the line
+redisp:	movei	a,15		;start fresh
+	pbout%
+	setz	b,		;null to put at end of string
+	move	a,(p)		;get d (current byte pointer)
+	idpb	b,a		;put null next
+	move	a,-4(p)		;start of line
+	psout%
+	jrst	decdon
+
+;now the simple action routines
+dectwo:	call	backsp
+	jrst	redisp
+decone:	call	backsp
+	jrst	redisp
+decdon:	pop	p,d
+	pop	p,c
+	pop	p,b
+	ret
+
+;here is the backspacer:
+backsp:	movei	a,.priou	;if at start of physical line, redisplay prev
+	rfpos%
+	trnn	b,777777	;if zero, is at start
+	 ret			;redisplay needed
+	movei	a,.priou	;set for literal use of ^H
+	rfcoc
+	push	p,b
+	tlz	b,(3B17)
+	tlo	b,(2B17)
+	sfcoc
+	hrroi	a,[byte (7)10,40,10]	;bs,sp,bs
+	psout%
+	pop	p,b
+	movei	a,.priou	;retore coc
+	sfcoc
+	aos (p)
+	ret
+
+> ;ife pa2040
+> ;ife sumex
+> ;ifn tenex
+
+
+ioecbp:	pop p,c
+	pop p,b
+	adjstk p,-1
+	jrst ioerp
+
+	reloc
+
+ttybsz==^D250		;no of char's in buffer
+ttybuf:	block ^D50	;buffer itself
+
+	reloc
+
+puttty:	move a,filcmp(b)
+	pbout%
+	 chkquo
+	 erjmp ioerp
+	ret
+
+ttyini:	setzm filbct(b)			;this is done by breakin
+	ret
+	subttl actual I/O for terminals openned as files
+
+;on tenex, this routine is only used for the controlling terminal
+
+getcht:	sosge filbct(b)
+	 call tdvadv
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	ildb a,filbpt(b)
+	jumpe a,getcht
+	cain a,.chcnz		;control-Z?
+	 jrst simeof		;yes - is really eof
+	jrst getchr
+
+;device-dependent open routine
+tdvopn:	tro g,of%wr		;need write priv's to do echo output
+	setzm filbct(b)		;force read on first get
+	setzm filter(b)		;no saved errors
+	movei a,1		;get a one page buffer
+	call alcbuf
+	movei a,5000		;set up buffer size for CURPOS
+	movem a,filbfs(b)
+	jrst openfi
+
+tdvadv:	
+ife tenex&<1-pa2040>,< ;[7]
+	skipe filter(b)		;if any stored error
+	jrst simerx		;do it and abort
+	push p,[exp 4]		;construct arg block for texti - size
+	push p,[exp rd%top!rd%jfn]
+	move t,filjfn(b)
+	hrl t,t
+	push p,t
+ifn klcpu,<
+	move bix,filbix(b)	;[46]place to put input
+	push p,[point 7,(bix)]
+> ;ifn klcpu
+ife klcpu,<
+	movx t,<point 7,>
+	hrr t,filbix(b)
+	push p,t
+> ;ife klcpu
+	push p,[exp 5000]	;no of char's allowed
+	xmovei a,-4(p)
+ ifn pa2040,<
+	call $$texti
+	 hrrzm a,filter(b)	;save error for simerr
+  >;ifn pa2040
+ ife pa2040,<
+	texti%
+	 chkquo
+	 ercal txtier
+  >;ife pa2040
+	movei t,4777		;no. of char's remaining
+	sub t,(p)
+	adjstk p,-5
+> ;ife tenex
+
+ifn tenex&<1-pa2040>,< ;[7] begin
+	push p,b
+	push p,c
+ifn klcpu,<
+	move bix,filbix(b)	;place to put input
+	movx a,<point 7,(bix)>
+> ;ifn klcpu
+ife klcpu,<
+	movx a,<point 7,>
+	hrr a,filbix(b)
+> ;ife klcpu
+	move b,[exp 5000]	;count
+  ifn sumex,< 
+	movei c,032012		;break on ^Z, LF
+	pstin			;[14] sumex/imsss line read
+	ldb t,a			;get terminator
+	caie t,15		;cr?
+	 jrst tdvadn		;no, normal
+	movei t,12		;yes, add lf
+	idpb t,a		;
+	subi b,1		;count it
+  >
+  ife sumex,<
+	call	rdstr		;[14] non-sumex simulation of line read
+  >;ifn tenex&<1-pa2040>
+tdvadn:
+	movei t,4777		;no of char's remaining
+	subi t,(b)
+	pop p,c
+	pop p,b
+> ;ifn tenex [7] ^^
+
+	jumpl t,tdvadv		;none there - try again or do error now
+	movem t,filbct(b)	;  (caller assumes we got at least 1)
+ifn klcpu,<
+	movx t,<point 7,(bix)>
+	movem t,filbpt(b)
+> ;ifn klcpu
+ife klcpu,<
+	movx t,<point 7,>
+	hrr t,filbix(b)
+	movem t,filbpt(b)
+> ;ife klcpu
+	ret
+
+setpt:	setzm filbct(b)		;setpos (curpos is curpbx)
+	skipe filter(b)		;activate stored errors
+	call simerr
+	jrst setpbx
+
+;special CURPOS
+curpt:	move d,b		;get current byte no.
+	hrrz a,filjfn(d)
+	rfptr%
+	 erjrst [seto b,
+		 jrst .+1]
+	skpwrt(d)
+	sub b,filbct(d)		;if reading, we are buffered ahead
+	movem b,1(p)
+	move b,d
+	ret
+
+
+ioerp5:	adjstk p,-6		;note - 5 to restore stk, 1 to abort caller
+	jrst ioerp
+
+txtier:	hrrzm a,filter(b)	;save error for simerr
+	ret
+
+;TDOCUR - output portion of TTY buffer before current position
+; uses t,a
+; assumes B is FCB
+; returns column position of prev char in C, ILDB ptr to current char in T
+tdocur:	push p,b
+	push p,e
+ifn klcpu,<
+	move bix,filbix(b)
+	movx t,<point 7,(bix)> ;t is byte ptr
+> ;ifn klcpu
+ife klcpu,<
+	movx t,<point 7,>
+	hrr t,filbix(b)
+> ;ife klcpu
+	hrrz a,filjfn(b)	;a is jfn
+	setz c,			;c is column counter
+	move e,filbpt(b)	;e _ byte pointer for end
+tdocr2:	move b,t		;a _ new copy of byte ptr
+	ibp b			;consider new char
+	camn b,e		;if it is cur char, we are done
+	 jrst tdocr1
+  ;begin safety - prevent infinite loop in case ptr somehow messed up
+	hrrz b,t		;addr from byte ptr
+	caile b,1000		;still within buffer?
+	 jrst tdocr1
+  ;end safety	
+	ildb b,t		;else do a real advance to this char
+	aos c			;and count it
+	bout%
+	jrst tdocr2		;yes, loop
+
+tdocr1:	rfpos%			;RH(b) _ position in line
+	skipe b			;if not terminal, use counted C
+	hrrz c,b		;use position in terminal line
+	pop p,e
+	pop p,b
+	ret
+
+;TDVSHL - Show the entire current line, with an arrow under the
+;  current position.  No sideeffects.
+;expects b to be set up
+tdvshl:	push p,t
+	push p,a
+	push p,b
+	push p,c
+  ;put out the line
+	call tdocur		;put out start of line
+	hrrz a,filjfn(b)
+	move b,t		;now put out cur and rest of line
+	move t,c		;t _ position of ^ on line
+	setz c,
+	sout%
+  ;now put out a line with ^ under cur pos
+    ;crlf unless old line ended in one
+	rfpos%			;probably retype ended in a CRLF
+	hrrz b,b		;b _ current pos on line
+	caig b,1		;if not, crlf
+	 jrst tdvsh1
+	hrroi b,[asciz /
+/]
+	setz c,
+	sout%
+tdvsh1:
+    ;spaces up to the right place
+	movei b," "		;now blanks up to cur pos
+tdvsh4:	sojl t,tdvsh3		;up to column shown in t
+	bout%
+	jrst tdvsh4
+    ;put out the ^
+tdvsh3:	movei b,"^"		;now caret under cur. pos
+	bout%
+	hrroi b,[asciz /
+/]
+	setz c,
+	sout%			;and CRLF
+	pop p,c
+	pop p,b
+	pop p,a
+	pop p,t
+	ret
+
+;TDVFXL - clear rest of line and ask user for more.
+;expects b to be set up
+;t - PC to print if error msg
+tdvfxl:	call ttyini
+	hrrz a,filjfn(b)
+	jrst tryagn
+
+	subttl line and page routines (all ascii modes)
+
+;Note that getln is called by readln.  Thus I class it as a high-level
+; function and so abort the operation if eof is set.  The low-level
+; functions (get, put, etc.) will try to go on even if eof is set.
+
+getlx1:	call @filget(b)
+getlnx::skipe fileof(b)		;stop after errors
+	 ret
+	skipg fileol(b)
+	 jrst getlx1
+	jrst @filget(b)
+
+;the following is a version of GETLNX that uses lazy I/O for the
+;final GET
+
+getlz1:	call @filget(b)
+getlnz::skipe fileof(b)		;stop after errors
+	 ret
+	skipg fileol(b)
+	 jrst getlx1
+	movei t,314156		;set special lazy status
+	movem t,filtst(b)
+	ret
+
+
+putlnx::movei t,.chcrt
+	movem t,filcmp(b)
+	call @filput(b)
+	movei t,.chlfd
+	movem t,filcmp(b)
+	jrst @filput(b)
+
+putpgx::move a,filcmp(b)	;get last char output
+	move a,@filcht(b)	;get eoln flag and mapped char
+	tlnn a,-1		;end of line already?
+	call putlnx		;no, need EOL here
+	movei t,.chffd		;now do the FF
+	movem t,filcmp(b)
+	jrst @filput(b)
+	subttl i/o routines for record files, sin/sout i/o used
+
+;args to getbx and putbx:
+;	b - fcb
+;	c - count of words to transfer
+
+getbx:	move e,b		;record read - save fcb
+	hrrz a,filjfn(e)	;source
+ifn klcpu,<
+	xmovei bix,filcmp(b)	;destination
+	movx b,<point 36,(bix)>
+> ;ifn klcpu
+ife klcpu,<
+	hrri b,filcmp(b)
+	hrli b,(point 36,)
+> ;ife klcpu
+	movem c,fillct(e)	;store count for error recov. and putx
+	movn c,c		;count (negative means stop on count)
+	setz d,
+	sin%
+	 erjmp ioerbx
+	ret
+
+getxbx:	move e,b		;similar to getbx, but continue old read
+	hrrz a,filjfn(e)
+ifn klcpu,<
+	xmovei bix,filcmp(e)
+	add bix,fillct(e)	;start after last record
+	movx b,<point 36,(bix)>
+> ;ifn klcpu
+ife klcpu,<
+	movei b,filcmp(e)
+	add b,fillct(e)
+	hrli b,(point 36,)
+> ;ife klcpu
+	exch c,fillct(e)	;say we have transferred all bytes, get old cnt
+	sub c,fillct(e)		;negative difference
+	setz d,
+	sin%
+	 erjmp ioerbx
+	ret
+
+ioerbx:	addm c,fillct(e)
+	move d,e
+	jrst ioer
+
+putbx:	move e,b		;record write - save fcb
+putby:	hrrz a,filjfn(e)	;source - entry for putx
+ifn klcpu,<
+	xmovei bix,filcmp(e)	;destination
+	movx b,<point 36,(bix)>
+> ;ifn klcpu
+ife klcpu,<
+	movx b,<point 36,>
+	hrri b,filcmp(e)
+> ;ife klcpu
+	movem c,fillct(e)	;count
+	movn c,c		;make count negative
+	setz d,
+	skipe c			;[40] zero is special
+	sout%
+	 chkquo
+	 erjmp ioerbx
+	ret
+
+putxbx:	move e,b		;record rewrite
+	hrrz a,filjfn(e)
+	rfptr%			;see where we are now
+	 erjrst eioer		;[7]
+	sub b,fillct(e)		;get to beginning of record
+	sfptr%
+	 erjrst eioer		;[7]
+	move c,fillct(e)	;size of record
+	jrst putby		;now put it out
+
+curpbx:	move d,b		;get current byte no.
+	hrrz a,filjfn(d)
+	rfptr%
+	 erjrst [seto b,
+		 jrst .+1]
+	movem b,1(p)		;return value goes here
+	move b,d
+	ret
+
+setpbx:	move e,d		;suppress get flag
+	move d,b		;save fcb
+	hrrz a,filjfn(d)
+	move b,c		;place to go
+	sfptr%
+	 erjrst ioer		;[7]
+	move b,d		;restore b for get routine
+	jrst posdon		;common code to clear status and do get
+
+bxopn:	call openfi
+bxini:	setzm fillct(b)		;initialization for open
+	ret
+	subttl i/o routines for tape - sinr/soutr i/o used
+
+;args to getbxr and putbxr:
+;	b - fcb
+;	c - count of words to transfer
+
+getbxr:	move e,b		;record read - save fcb
+	hrrz a,filjfn(e)	;source
+ifn klcpu,<
+	xmovei bix,filcmp(e)	;destination
+	movx b,<point 36,(bix)>
+> ;ifn klcpu
+ife klcpu,<
+	movx b,<point 36,>
+	hrr b,filcmp(e)
+> ;ife klcpu
+	movem c,fillct(e)	;store count for error recov. and putx
+	move t,c		;save requested count
+	movn c,c		;count (negative means stop on count)
+	setz d,
+	sinr%
+	 erjmp ioerbx
+	add c,t			;get no. words actually read
+	movem c,fillct(e)	;save as real count
+	ret
+
+putbxr:	move e,b		;record write - save fcb
+	hrrz a,filjfn(e)	;source - entry for putx
+ifn klcpu,<
+	xmovei bix,filcmp(e)	;destination
+	movx b,<point 36,(bix)>
+> ;ifn klcpu
+ife klcpu,<
+	movx b,<point 36,>
+	hrr b,filcmp(e)
+> ;ife klcpu
+	movem c,fillct(e)	;count
+	movn c,c		;make count negative
+	setz d,
+	skipn c			;[40] zero is special
+	hrri b,[exp 0]		;[40] stop immediately
+	soutr%
+	 chkquo
+	 erjmp ioerbx
+	ret
+
+lstrec::move a,fillct(b)	;get size of last record
+	movem a,1(p)
+	ret
+
+;Here are the routines for handling text with SINR and SOUTR
+
+putcx:	sosge filbct(b)		;write a character
+	 jrst ptcxer		;ran out of space in buffer - line too long
+	move a,filcmp(b)
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	idpb a,filbpt(b)
+	ret
+
+ptcxer:	movei a,iox20		;illegal tape record size
+	movem a,filerr(b)
+	jrst ioerpx		;simulate I/O error
+
+getcx:	sosge filbct(b)		;read a character
+	 jrst getcxl		;end of buffer - this is end of line
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	ildb a,filbpt(b)
+	andi a,177
+	jumpe a,getcx		;ignore nulls
+	move a,@filcht(b)
+	setzm fileol(b)		;the only end of line is end of record
+	hrrzm a,filcmp(b)
+	ret
+
+;GETCXL - here from GETCX when run out of chars in record.  We simulate
+;  end of line, and set things so the next character read forces going
+;  to a new record.
+getcxl:	xmovei a,getlx		;make the next GETCH get a new line
+	movem a,filget(b)
+	movei a,1		;set EOL
+	movem a,fileol(b)
+	movei a,40		;and call it a blank, as per Pascal std.
+	movem a,filcmp(b)
+	ret
+
+;Here we have the routines to go to a new record.  there is a special
+;version for format F
+
+putlx:	push p,c		;write the buffer
+	push p,b
+	hrrz a,filjfn(b)
+	movn c,filbfs(b)	;compute number of bytes to dump
+	add c,filbct(b)		;subtract number not actually used
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	move b,filpbp(b)
+	skipn c			;[40] zero is special
+	hrri b,[exp 0]		;[40] stop immediately
+	soutr%
+	 chkquo
+	 erjmp badpag
+	pop p,b
+	move a,filbfs(b)	;reinitialize state
+	movem a,filbct(b)
+	move a,filbfp(b)
+	movem a,filbpt(b)
+	pop p,c
+	ret
+
+;PUTLXX - special version for format F - writes an exact line
+putlxx:	movei a," "		;put blanks until the record is full
+	skipg c,filbct(b)	;space left?
+	 jrst putlx		;no - do output now
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	idpb a,filbpt(b)	;yes - put in spaces
+	sojg c,.-1		;as long as there is space
+	setzm filbct(b)		;now no space left
+	jrst putlx		;do normal write
+
+;we need a special PAGE also
+putpx:	move a,filbfs(b)	;reinitialize state
+	came a,filbct(b)	;already at beginning of line?
+	call @filpln(b)		;no, do so
+	movei t,.chffd		;now do the FF
+	movem t,filcmp(b)
+	jrst @filput(b)
+
+getlx:	xmovei a,getcx		;restore normal reader
+	movem a,filget(b)
+	push p,c
+	push p,b
+	hrrz a,filjfn(b)
+	movn c,filbfs(b)
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	move b,filpbp(b)
+	sinr%
+	 erjmp badpag
+	pop p,b
+	add c,filbfs(b)		;compute actual number transferred
+;[40] remove subi c,1 - code must work for empty lines
+	movem c,filbct(b)
+	move a,filbfp(b)
+	movem a,filbpt(b)
+	pop p,c
+	jrst getcx		;[40] was jrst getcxn
+
+;getlz - lazy version of above
+
+getlz:	movei a,314156		;just set up so next access to file does get
+	movem a,filtst(b)
+	xmovei a,getlx		;force a SINR at next get
+	movem a,filget(b)	;getlx resets filget	
+	ret
+
+;CHROPX - mode-specific open.  This is bascially a version of
+; CHROPN, the byte-mode open, except that it has to test for
+; format F and use a special PUTLN routine.
+chropx:	skipe filerr(b)		;byte mode I/O open
+	 ret			;no-op if error
+;Here is the code that is always done
+;The following is in fact just CHROPN
+	call openfi		;now open it
+chrox1:	call logopn		;compute logical parameters
+	move t,filbfp(b)	;physical param's = logical ones
+	movem t,filpbp(b)
+	move t,filbfs(b)
+	movem t,filpbs(b)
+;This part sets up for special EOL handling because of the nature of this mode
+	hrrz t,filcht(b)	;don't censor EOL char's, since they aren't EOL
+	cain t,norchx		;if a char table that censors, change it
+	 movei t,norcht		;[46] section # will not change
+	cain t,lcchx
+	 movei t,lccht
+	hrrm t,filcht(b)	;put back correct table
+;We have to "prime the pump" for reading.  this mode is different from others
+;  because it will manufacture an EOL char when the buffer empties.  So if
+;  we just start with an empty buffer, we get an initial EOL!
+	skpwrt
+	 call getcxl		;if reading, init so the first GET reads
+;The rest of this code is checking for writing a tape in format F, in which
+;  case we have to set up a special routine for PUTLN.
+;Writing
+	skpwrt			;if reading, no problem 
+	 ret
+;a tape
+	move h,b		;save FCB
+	hrrz a,filjfn(h)	;see if this is a tape
+	dvchr%
+	ldb b,[point 9,b,17]	;get device type
+	caie b,.dvmta		;if not tape, nothing to do
+	 jrst cpopjh		;exit, restoring B from H
+;in format F
+;  Since we are writing we can't just look at the label.  We have to
+;  predict whether it will be format F.  It turns out that this will
+;  happen only if the tape is labelled and the user has specified
+;  ;FORMAT:F.
+
+;labelled
+	push p,[exp 3]		;place to put result
+	push p,[exp 0]
+	push p,[exp 0]
+	hrrz a,filjfn(h)
+	movei b,.morli		;look at label
+	xmovei c,-2(p)
+	mtopr%
+	 erjmp chroxx		;not labelled, exit restoring stack and B
+	move a,-1(p)		;label type
+	cain a,.ltunl		;if unlabelled, forget this stuff
+	 jrst chroxx		;not labelled, exit restoring stack and B
+;the user has specified format F
+	movx a,<point 7,-2(p)> ;[46] put results in stack
+	setzm -2(p)
+	hrrz b,filjfn(h)
+	movei c,js%at1		;return attr
+	hrroi d,[asciz /FORMAT/]
+	jfns%
+	 erjmp chroxx		;not format F, exit restoring stack and B
+	move a,-2(p)
+	came a,[asciz /F/]
+	 jrst chroxx		;not format F, exit restoring stack and B
+;We now know that we will need the special format F PUTLN.  We have to set
+; up the record size, so it knows how much to fill.  This is more complex
+; than it sounds.  Since the tape is being created, we can't just get the
+; record size from the label.  We have to predict what the monitor will
+; decide on.  This turns out to be the user's RECORD attribute if there is
+; one, or the block size if not.
+;the user's RECORD attribute
+	movx a,<point 7,-2(p)> ;[46] put rec size in stack
+	hrroi d,[asciz /RECORD/]
+	jfns%
+	 erjmp chronr		;no record attribute, use default
+	movx a,<point 7,-2(p)>
+	movei c,^D10
+	nin%
+	 erjmp chronr		;odd - use default too
+	move c,b
+	jrst chrofr		;found record size
+
+;the block size if there is not RECORD attribute
+chronr:	hrrz a,filjfn(h)	;no record attr - use default
+	movei b,.morrs
+	mtopr%
+	 erjmp chroxx		;can't find that way either, treat as not F
+;here the above two cases join - we have the record size in C
+chrofr:	camle c,filbfs(h)	;too big for buffer?
+	 jrst rectb		;record too big
+	movem c,filbfs(h)	;use this instead of buffer size
+	movem c,filbct(h)	;we start with a full buffer available
+	xmovei a,putlxx		;get special PUT for format F
+	movem a,filpln(h)
+;exit, restoring stack and B
+chroxx:	adjstk p,-3
+	move b,h
+	ret
+			
+rectb:	adjstk p,-3		;record too big
+	move b,h	
+	jrst ptcxer		;give error message
+
+;LOGCLX - mode-specific closer - force the buffer
+logclx:	skpwrt			;only if writing
+	ret
+	move a,filbct(b)	;anything in this buffer?
+	came a,filbfs(b)
+	jrst @filpln(b)		;yes - force it
+	ret			;no
+
+loginx:	skpwrt			;breakin
+	jrst getcxl
+	move a,filbfs(b)
+	movem a,filbct(b)
+	move a,filbfp(b)
+	movem a,filbpt(b)
+	ret
+
+	subttl magtape initialization
+
+;This is a device-dependent openning routine for magtape.  It is used
+;when the user leaves the I/O mode to us.  Here is what we do
+;  format U, default, and unlabelled:  "stream I/O": out: WRDOPN, in: CHROPN
+;  format F, D, and S:  "record I/O": text:CHROPX, binary:BXOPN, except
+;	CHROPN for text input
+;Unfortunately, we have to do the OPENF first in order to be able to
+;read labels.
+
+;In addition, if this is an output file and the user hasn't specified
+;a format, we want to specify format U.  This is somewhat harder than it
+;sounds, since we can't specify the format after a GTJFN.  However
+;since format U will default to stream I/O, we just make it use WRDOPN,
+;which uses 36 bits.  This will get us format U by default.
+;Input has to use CHROPN for format U in case the tape is foreign, in
+;which case DEC is nice to us by forcing 8 bits internally.
+;We use CHROPN for text input because the monitor supplies CRLF's
+;at end of records.
+;Unfortunately, we have to do the OPENF first in order to be able to
+;read labels.
+
+;all three of the possible openning routines begin this way
+mtaopn:	skipe filerr(b)
+	ret
+;might as well set up the stack now - everybody needs it
+	push p,[exp 5]
+	push p,[exp 0]
+	push p,[exp 0]
+	push p,[exp 0]
+	push p,[exp 0]
+	move h,b		;save B
+	skpwrt			;if open for write
+	jrst mtard		;not - no need to force 36 bits
+
+;Part I - Check parameters for output file
+  ;check unlabelled
+	hrrz a,filjfn(h)
+	movei b,.morli		;look at label
+	xmovei c,-4(p)
+	mtopr%
+	 erjmp mtawrd		;unlabelled, force word
+	move a,-3(p)		;get label type
+	cain a,.ltunl
+	 jrst mtawrd		;unlabelled, force word
+  ;check U or default
+	movx a,<point 7,(p)> ;[46] put results in stack
+	setzm 0(p)
+	hrrz b,filjfn(h)
+	movei c,js%at1		;return attr
+	hrroi d,[asciz /FORMAT/]
+	jfns%
+	 erjmp mtawrd		;unlabelled, force word
+  ;some real format 
+	move a,(p)
+	camn a,[asciz /U/]
+	jrst mtawrd		;format U, force word
+
+;here is the code for output files other than U - done separately from
+;input since we don't want to do the MTOPR again
+mtalog:	move b,h		;openfi needs b
+	call openfi		;open with logical byte size
+	hrrz a,filjfn(h)	;say standard ANSI format
+	movei b,.mosmv
+	movei c,.tpfnc
+	mtopr
+	erjmp .+1		;ignore errors
+	jrst mtaans		;now go handle ans type
+
+;Part II - Check parameters for input file
+mtard:	call openfi
+	skipl filcnt(h)		;[45] if text
+	 jrst mtachr		;[45] use CHROPN - monitor handles everything
+	hrrz a,filjfn(h)	;now we can look at the label
+	movei b,.montr		;[45] set no translate, since binary should see all
+	movei c,1		;[45]
+	mtopr			;[45]
+	 erjmp mtachr		;[45] unlabelled? use CHROPN
+	movei b,.morli
+	xmovei c,-4(p)
+	mtopr%
+	 erjmp mtachr		;unlabelled, use CHROPN
+	move a,-3(p)		;get label type
+	cain a,.ltunl
+	 jrst mtachr		;unlabelled, use CHROPN
+	move a,0(p)		;format
+	cain a,"U"
+	 jrst mtachr		;format U, use CHROPN
+	;jrst mtaans
+
+;Part III:
+;Here are the exit routines.  they set up the dispatch vector, and then
+; go to the openning routine after the OPENF
+
+;now we know we have format F, D, or S - handle it in some record mode
+mtaans:	adjstk p,-5		;[41] restore state
+	move b,h
+	skipge filcnt(b)
+	jrst mtabx		;binary - BXOPN
+	;jrst .+1
+
+;text - use CHROPX
+	movei a,fm%rec
+	call setdsp 		;set up dispatch block
+	jrst chrox1		;and go to CHROPX
+
+;binary - use BXOPN
+mtabx:	movei a,fm%rec
+	call setdsp
+	jrst bxini
+
+;format U input - use CHROPN
+mtachr:	adjstk p,-5		;[41]
+	move b,h		;restore FCB
+	movei a,fm%chr
+	call setdsp		;set up dispatch block
+	jrst chrop1
+
+;format U output - use WRDPON
+mtawrd:	adjstk p,-5		;[41]
+	move b,h		;restore FCB
+  ;we haven't done OPENF yet, so we can just JRST to normal routine
+	movei a,fm%wrd
+	call setdsp		;set up dispatch block
+	jrst wrdopn
+
+	subttl i/o error routines
+
+illfn::	move d,b		;here for illegal function
+	movei a,mtox1		;"illegal function" (from mtopr)
+	movem a,filerr(d)
+	jrst erp.		;these errors are fatal
+unimp==illfn			;here for unimplemented function
+
+ife tenex,<
+;chkquo - special thing designed to be used with ERCAL after a
+;jsys that may write to disk.  If quota is exceed, gives a
+;message that looks just like the EXEC's, and retries the jsys
+;if continued.
+quochk:	push p,a
+	push p,b
+	movei a,.fhslf
+	geter%
+	tlz b,777777		;b _ error code
+	caie b,iox11		;is it quota problem?
+	cain b,pmapx6
+	 jrst isquot		;yes
+;not a quota problem, do the next instruction, including erjmp/cal
+;simulation.
+	move a,-2(p)		;ret addr
+	hlrz b,(a)		;next inst
+	cain b,(erjmp)		;is erjmp?
+	 jrst dojmp
+	cain b,(ercal)		;is ercal?
+	 jrst docal
+retba:	pop p,b			;no, normal return
+	pop p,a
+	ret
+;here are the erjmp/cal simulations
+
+dojmp:	hrrz b,(a)		;(local part of) address to go to
+	hrrm b,-2(p)		;make us return there
+	jrst retba
+
+docal:	hrrz	 a,(a)		;address to call
+ifn klcpu,<hrl	a,sn.cod>	;make it local
+	pop	p,b
+	exch	a,(p)
+	adjstk	p,-1		;we now have goto addr 1(p)
+	aos	(p)		;return after the next ercal
+	jrst	@1(p)		;this is pjrst
+;here if it is a quota problem
+; print a message, and then prepare to retry the instruction
+isquot:	errmsg	< Quota exceeded or disk full at >
+	push	p,c
+	move	b,-3(p)		;[46] full return address
+	subi	b,2		;the actual jsys addr
+	movem	b,-3(p)		;[46] reset return address
+ifn klcpu,<
+	skipn	sn.cod		;if not extended
+> ;ifn klcpu
+	tlz 	b,777777	;clear flags
+	movei	c,8		;base 8
+	movei	a,.priou
+	nout%
+	 jfcl			;not sure how to handle errors here
+	tmsg	<
+[Find some space, then type CONTINUE]>
+; Finally we are ready to restore to the user's context and continue,
+; is user types CONTINUE
+	pop	p,c		;restore ac's in case user does EXAMINE
+	pop	p,b
+	pop	p,a
+	haltf%			;let him delete some files
+	ret
+
+> ;ife tenex	
+
+ioerpx:	move a,filerr(b)	;entry for those who already know the error
+	jrst ioerp2
+eioer:	skipa b,e	;entry if fcb is in e
+ioer:	move b,d	;special entry if fcb is in d
+;ioerp is the main error printer.  it preserves b up
+ioerp:	push p,b
+	movei a,.fhslf		;use current process
+	geter%
+	hrrz a,b		;error is in rh
+	pop p,b
+	movem a,filerr(b)	;and save new error
+ioerp2:	move t,filbad(b)	;now set eof and eoln
+	movem t,fileof(b)
+	movem t,fileol(b)
+	skipl filcnt(b)		;if ascii
+	setzm filcmp(b)		;clear the component (read/ln needs this)
+	move t,filflg(b)
+	caie a,iox4		;end of file always enabled
+	 trne t,fl%ioe		;user error handling?
+	  ret		;yes - let user handle it
+	move d,b
+erp.::	call erp		;now put out message
+	jrst endl		;and stop (fatal)
+
+spec==1
+
+erp..::
+erp:	errmsg	< >
+	movei a,.priou		;now the error message
+	move b,filerr(d)
+	hrli b,.fhslf		;current process
+	setz c,
+	erstr%
+	 jfcl
+	 jfcl
+	skipn filjfn(d)		;[15]
+	 jrst erpdon		;if no JFN, nothing to print
+	tmsg	< - >		;now the file name
+	movei a,.priou
+	hrrz b,filjfn(d)
+	setz c,
+	jfns%
+erpdon:	tmsg	<
+>
+	ret
+
+;various file cleanup stuff:
+
+;gotoc. - cleanup for goto
+;  b - new o
+;  c - new p
+;  d - where to go
+;any files above the new p and below the current p are to be released
+gotoc.::push p,c		;new P
+	push p,b		;new O
+	xmovei e,(p)		;release if leq e
+	xmovei f,(c)		;and gt f
+	xmovei g,blktab		;loop over blktab
+;loop on blktab
+gotol:	move b,(g)		;get the fcb addr there
+	camle b,f		;if leq f
+	camle b,e		;or g e
+	 jrst gotocn		; don't do anything with it
+;here if the FCB is in area to be released
+	setz c,			;yes - kill it
+	call doclos
+	setzm filtst(b)		;and indicate no longer valid
+	setzm (g)		;clear table entry
+	setom blklck-blktab(g)	;and release lock on it
+;end of loop on blktab
+gotocn:	camge g,lstblk
+	aoja g,gotol		;if any more to look at, do so
+;now we have killed all the files that we should have. Do the goto
+	pop p,o			;new O
+	pop p,t			;new P
+	move p,t
+	jrst (d)		;go to place where we should
+
+;dispc. - dispose of a record containing a file.  Search our
+;database for one that might be it
+;  b - addr of record
+;  c - length of record
+dispc.::push p,b		;save b and c
+	push p,c
+	move f,b		;f - lower limit
+	move e,b
+	add e,c			;e - upper limit
+	xmovei g,blktab		;loop over blktab
+;loop on blktab
+dispfl:	move b,(g)		;get the fcb addr there
+	caml b,f		;if lt f
+	caml b,e		;or ge e
+	 jrst dispfn		; don't do anything with it
+;here if the FCB is in area to be released
+	setz c,			;yes - kill it
+	call doclos
+	setzm filtst(b)		;and indicate no longer valid
+	setzm (g)		;clear table entry
+	setom blklck-blktab(g)	;and release lock on it
+;end of loop on blktab
+dispfn:	camge g,lstblk
+	aoja g,dispfl		;if any more to look at, do so
+	pop p,c
+	pop p,b
+	ret
+
+quit::
+end::	xmovei g,blktab		;loop through all files
+endcl:	skipn b,(g)		;get the fcb addr there
+	jrst endcn		;nothing there, try next
+	setz c,			;kill it
+	call doclos		;close it
+	setzm filtst(b)		;and indicate no longer valid
+	setzm (g)		;clear table entry
+	setom blklck-blktab(g)	;and release lock on it
+endcn:	camge g,lstblk		;go to next, if any
+	aoja g,endcl
+	jrst pasex.		;in PASMEM or PASFOR
+
+endl::	haltf%			;that's all, folks
+endl.:	errmsg	<Can't continue>
+	jrst endl
+
+erstat::move t,filerr(b)	;let user see his error
+	movem t,1(p)
+	ret
+
+analys::skipn filerr(b)		;let him see error string
+	ret
+	move d,b
+	call erp
+	ret
+
+;[43] - save the FCB in D, and change FILxxx(B) to FILxxx(D)
+clreof::move d,b		;[43] save FCB
+	skipn a,filjfn(d)	;if no file involved,
+	jrst clrOK		; then this is just bookkeeping
+	hrrz a,a		;otherwise clear monitor's error bits
+	gtsts%
+	 erjmp ioerp		;if bad jfn, failed
+	jumpge b,clrOK		;if file not open, nothing to do
+	tlzn b,(gs%eof!gs%err)	;now reset with error bits off
+	jrst clrOK		;no errors, nothing to do
+	ststs%
+	 erjrst ioer		;[7][43]
+clrOK:	move t,filbad(d)	;set to normal eof
+	trc t,1			;reverse of bad status
+	movem t,fileof(d)
+	setzm filerr(d)
+	move b,d		;[43]
+;[36] removed setting EOLN
+	ret
+
+notop:	move d,b		;where erp. wants it
+	movei a,desx5		;not open
+	movem a,filerr(d)
+	jrst erp.
+	subttl main file name getter for PROGRAM statement
+
+;AC usage for getfn.:
+;	b - fcb
+;	c - pointer to name in ascii, length=10 always
+;	d - flags for gtjfn (*** changed, was lh of c ***)
+;	h - used to save b
+;	garbarges all ac's except b
+
+ife tenex,<
+
+;note - this routine is not reeentrant.  Since it is used in the
+;  startup code, presumably it doesn't have to be.
+
+getfn.::call initb.		;always safe to init block at startup
+	move h,b
+   ;d already has the "substantive" bits - make sure odd ones are off
+	tlz d,(gj%fns!gj%sht)	;long form
+	hllm d,getfna+.gjgen	;use flag bits
+ifn klcpu,<
+	dmove d,(c)		;make up prompt and default
+	dmovem d,fnprom
+	dmovem d,deffil
+	dmovem d,hlpfn1
+	dmovem d,hlpfn2
+>;ifn klcpu
+ife klcpu,<
+	move d,(c)		;make up prompt and default
+	movem d,fnprom
+	movem d,deffil
+	movem d,hlpfn1
+	movem d,hlpfn2
+	move d,1(c)
+	movem d,fnprom+1
+	movem d,deffil+1
+	movem d,hlpfn1+1
+	movem d,hlpfn2+1
+>;ife klcpu
+		;note - FCB's that are initialized must all be global
+		;	variables, hence it is fine to refer to them
+		;	locally.
+	hrrz a,h		;get local address of file block
+	caie a,input		;if input or output, use TTY:
+	cain a,output
+	 jrst .+2
+	  jrst getfno
+	move a,[asciz /TTY:/]
+	movem a,deffil
+	move a,[ascii /TTY: /]
+	movem a,hlpfn2
+	move a,[ascii /     /]
+	movem a,hlpfn2+1
+getfno:	setzm getfna+.gjdev	;clear rest of arg block
+	move a,[getfna+.gjdev,,getfna+.gjdev+1]
+	blt a,getfna+16		;note - local blt is ok here!
+	setzm cmjfn
+	movei a,bufsiz*5	;init cmd block
+	movem a,cmdblk+.cmcnt	;space left
+	setzm cmdblk+.cminc	;char's not yet parsed
+	move a,cmdblk+.cmbfp
+	movem a,cmdblk+.cmptr	;next input
+;entry for error
+  ;main loop
+getfn1:	skipe a,cmjfn		;if any jfn gotten
+	rljfn%			;release it
+	 erjmp .+1
+	setzm cmjfn		;now no jfn
+  ;prompt
+	xmovei a,cmdblk
+	xmovei b,iniblk		;prompt
+	comnd%
+	 erjmp getfer
+	tlne a,(cm%nop)		;error?
+	 jrst getfer		;yes - message and try again
+;entry for reparse
+  ;get file name
+getfn2:	skipe a,cmjfn		;if any jfn gotten
+	rljfn%			;release it
+	 erjmp .+1
+	setzm cmjfn		;now no jfn
+	xmovei a,cmdblk
+	xmovei b,namblk		;file name
+	comnd%
+	 erjmp getfer
+	tlne a,(cm%nop)		;error?
+	 jrst getfer		;yes - message and try again
+	hrrzm b,cmjfn		;remember JFN in case have to close it
+	movem b,filjfn(h)	;and put in FCB
+
+  ;confirm
+	xmovei a,cmdblk
+	xmovei b,cfmblk		;confirm
+	comnd%
+	 erjmp getfer
+	tlne a,(cm%nop)		;error?
+	 jrst getfer		;yes - message and try again
+  ;exit
+	move b,h
+	ret
+	
+iniblk:	<.cmini>B8
+	z
+	z
+	z
+
+namblk:	<.cmfil>B8+cm%dpp+cm%hpp+cm%sdh
+	z
+	xwd -1,hlpfil
+	xwd -1,deffil
+
+cfmblk:	<.cmcfm>B8
+	z
+	z
+	z
+
+	reloc
+
+hlpfil:	ascii /One of the following:
+	File spec. for the Pascal file /
+hlpfn1: block 2
+	ascii /
+	Carriage return to use default, /
+hlpfn2:	block 2
+	asciz /
+/
+
+deffil:	block 3			;default name
+
+fnprom:	block 2			;file name
+	asciz / : /
+
+cmdblk:	getfn2			;reparse to loop
+	xwd .priin,.priou	;jfn's
+	xwd -1,fnprom		;^R
+	xwd -1,cmdbuf		;start of buffer
+	z			;next to parse
+	z			;left
+	z			;char's not parsed
+	xwd -1,atbuf		;atom buf
+	exp 5*bufsiz		;size of atom buf
+	adrs (getfna)		;addr of gtjfn arg
+
+bufsiz==^D30
+cmdbuf:	block bufsiz
+atbuf:	block bufsiz
+
+cmjfn:	block 1			;jfn needs releasing
+
+getfna:	z			;gen
+	xwd .priin,.priou	;jfn's
+	block 15		;other junk for COMND
+
+	reloc
+
+getfer:	errmsg	< >
+	movei a,.priou	;now error message
+	hrloi b,.fhslf
+	setz c,
+	erstr%
+	 jfcl
+	 jfcl
+	tmsg	<
+>
+	jrst getfn1
+
+> ;ife tenex
+
+ifn tenex,<
+
+getfn.:	call	initb.		;always init block at startup
+	move h,b
+	hllz g,d		;g _ gtjfn flags
+	setzm filflg(b)		;clear temp bit
+	move d,(c)		;d,e,f _ asciz prompt message
+	move e,1(c)
+	move f,[asciz / : /]
+getfn1:	hrroi a,d		;prompt
+	psout%
+	move a,g
+	move b,[.priin,,.priou]
+	gtjfn%
+	 jrst getfer
+getfnx:	movem a,filjfn(h)
+	move b,h
+	ret
+
+
+getfer:	cain a,gjfx34	;? typed
+	 jrst getfhl	;print help
+	cain a,gjfx33	;no name? - treat as default
+	 jrst getfdf
+getfe1:	errmsg	< >
+	movei a,.priou	;now error message
+	hrloi b,.fhslf
+	setz c,
+	erstr%
+	 jfcl
+	 jfcl
+	tmsg	<
+>
+	jrst getfn1
+
+getfhl:	tmsg	<
+    One of the following:
+	File spec for the PASCAL file >
+	movei a,.priou		;print the file name
+	hrroi b,d
+	movni c,^D10
+	sout%
+	tmsg	<
+	Carriage return to use default, >
+  ;Now give him the right default
+	hrrz a,h		;get local part of address
+	caie a,input
+	cain a,output
+	 jrst getfh1
+	movei a,.priou
+	hrroi b,d
+	movni c,^D10
+	sout%
+	jrst getfh2
+getfh1:	tmsg	<your terminal>
+getfh2:	tmsg	<
+>
+	jrst getfn1
+
+;here for default (TTY: for INPUT and OUTPUT, else filename)
+getfdf:	move a,g		;flags user specified
+	tlo a,(gj%sht)		;but short form
+	tlz a,(gj%xtn!gj%fns)	;file spec as string
+	hrroi b,d
+	hrrz t,h		;get local part of address
+	caie t,input
+	cain t,output
+	 hrroi b,[asciz /TTY:/]
+	gtjfn%
+	 jrst getfe1
+	jrst getfnx		;done, return jfn and exit
+
+> ;ifn tenex
+
+;initz. - special entry to initb.  for use when initb. is to be
+;called for uninitialized files.  The caller checks for status
+;314157.  We check for 313156 (lazy read in progress), and return
+;immediately if it is set.
+
+initz.::push p,a
+	move a,filtst(b)
+	cain a,314156
+	jrst initbx		;exit	
+	jrst initb1		;else fall into initb.
+
+;initb. - make file control block be fresh and clean
+;  b - addr of fcb
+;saves all ac's
+
+initb.::push p,a
+;We must enter this into the table of known blocks before setting
+; filtst, in order to prevent a race condition if the user ^C's
+; and restarts during this routine.  We must make sure that the
+; code as pasin1 knows to clear filtst.
+
+;enter it into the table of known blocks
+initb1:	move a,[-blklen,,blklck] ;aobjn word for searching block table
+				;we are actually searching table of locks
+	aose (a)		;take it if free.  Skip if it worked
+				;This code is designed to be reentrant, so
+				;a single instruction must test and take it
+	 aobjn a,.-1		;failed, try again
+	jumpge a,initbf		;failed to find an index location
+	movem b,blktab-blklck(a) ;found it, save block addr
+	xmovei a,blktab-blklck(a) ;and update high-water mark
+	camle a,lstblk
+	movem a,lstblk
+	subi a,blktab		;[260] turn into offset (with section # in LH)
+initbc:	call init.b		;[260]
+	hrrzm a,filblk(b)	;[260] save offset only
+initbx:	pop p,a			;[260]
+	ret			;[260]
+	
+;[260] init.b is a special entry for the compiler's use
+;[260] init the block, but not blktab
+init.b:	push p,a		;[260]
+ifn klcpu,<
+	skipe sn.cod		;if extended use XBLT
+	jrst [	movei t,filcmp+1
+		xmovei a,protob
+		push p,b
+		xblt t,
+		pop p,b
+		jrst initb2]
+> ;ifn klcpu
+	hrli a,protob		;blt prototype block to it
+	hrr a,b
+	blt a,filcmp(b)		;local blt is ok here!
+initb2:	xmovei a,filcmp(b)	;now initializations that depend upon address
+	movem a,filptr(b)
+	pop p,a
+	ret
+
+initbf:	call blktbe		;print error message
+	jrst initbc		;init the block anyway if he says to
+
+;prototype block
+protob: exp 0		;FILPTR== 0	;pointer to filcmp
+	exp 0		;FILEOF== 1	;input: 0 == normal state
+					;	1 == eof or error
+					;output:1 == normal state
+					;	0 == error
+	exp 0		;FILEOL== 2
+	exp 0		;FILERR== 3	;RH - last error no, LH - enabled
+	exp 0		;filjfn==4	;jfn
+	exp 0		;filblk==5	;RH - offset in BLKTAB; LH - free
+	exp 0		;filflg==6	;flags
+	exp 1		;filbad==7	;contents to set fileof to if error
+	ifiw norchx(a)	;filcht==10	;pointer to character mapping table
+	exp 0		;fils11==11
+	exp 0		;fils12==12
+	exp 0		;fils13==13
+	exp 0		;fillts==14
+	exp 0		;filbuf==15	;buffer for paged files:
+;;[46] modified FILBUF, rh=page#, not address...
+				;LH == # of pages, RH == addr of first word
+			;filr11 through filr99 must be contiguous
+			;filr11==16	;first routine
+	adrs (notop)		;filget==16	;routine for GET
+	adrs (notop)		;filput==17	;routine for PUT
+	adrs (notop)		;filgln==20	;routine for GETLN
+	adrs (notop)		;filpln==21	;routine for PUTLN
+	exp 0			;filclo==22	;device-dependent close
+	adrs (unop+filr99+1)  	;filr99==23	;pointer to other routines
+	exp 0		;fils15==24	;another state variable
+	exp 0		;fils16==25
+	exp 0		;fils17==26
+	exp 0		;fils20==27
+	exp 0		;fils21==30
+	exp 0		;FILLNR==31	;IF ASCII MODE - LINENR
+	exp 0		;FILCNT==32	;neg size of component
+					;    if text file: zero
+			;test sign bit of this loc to see if an ASCII file
+	exp 0		;filst1==33	;state variables for special I/O modes
+	exp 0		;filst2==34
+	exp 0		;filst3==35
+	exp 0		;filst4==36
+	exp 0		;filst5==37
+	exp 314157	;filtst==40	;should be 314157 if file is open
+	exp 0		;filind==41	;location in index
+	exp 0		;42 - spare
+	exp 0		;FILCMP==43	;FIRST WORD OF COMPONENT
+
+;ttypr. - do initial get for INPUT
+ttypr.::hrrz a,input+filjfn
+	dvchr%			;see if a tty
+	ldb c,[point 9,b,17]	;dev type field
+	caie c,.dvtty		;if not tty, forget it
+	 jrst ttyprg
+	hrrz a,input+filjfn
+	hrroi b,[asciz /[INPUT, end with ^Z: ]
+/]
+	setz c,
+	sout%
+ttyprg:	xmovei b,input
+	jrst getch
+
+	subttl buffered I/O - text routines
+
+
+;These routines do ildb/idpb from a one page buffer, which is filled/
+; emptied by sin/sout.  It is a bit confusing because the I/O is
+; often done in 36 bit mode, for efficiency.  thus physical buffer
+; size is the number of 36 bit bytes in the buffer when you are in
+; this "word mode", and the number of logical bytes when in normal
+; "character mode".  Also, physical buffer byte pointer points to
+; the beginning of the buffer, having a byte size of 36 in word mode,
+; and the logical byte size in charcter mode.  These routines are
+; inefficient for mag tape when the record size is much less than
+; a page, as proper overlapping of I/O and computation requires our
+; buffer to be near the record size or smaller.
+
+putchb:	sosge filbct(b)		;write a character
+	 call wrtbuf		;put out the buffer
+	move a,filcmp(b)
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	idpb a,filbpt(b)
+	ret
+
+getchb:	sosge filbct(b)		;read a character
+	 call reabuf		;fill the buffer
+getcb1:	
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	ildb a,filbpt(b)        ;;entry for wrdlts
+	hrrz t,filbpt(b)
+ifn klcpu,<
+	add t,bix
+> ;ifn klcpu
+	move t,@t
+	tdne t,fillts(b)	;line number test bit
+	 jrst getbln		;saw a line number
+	andi a,177
+	jumpe a,getchb		;ignore nulls
+	move a,@filcht(b)
+	hlrem a,fileol(b)
+	hrrzm a,filcmp(b)
+	came a,[-1,," "]	;CR is standard Pascal mode
+	 ret
+	jrst geteol		;get "real" EOLN
+
+getbln:	movem t,fillnr(b)
+	aos filbpt(b)
+	movni t,5
+	addb t,filbct(b)
+	jumpge t,getchb
+	call reabuf
+	ibp filbpt(b)
+	jrst getchb
+
+	subttl buffered I/O - buffer advance routines
+
+wrtbuf:	push p,bix
+	push p,c		;write the buffer
+	push p,b
+	hrrz a,filjfn(b)
+	movn c,filpbs(b)
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	move b,filpbp(b)
+	skipe c			;[40] zero is special
+	sout%
+	 chkquo
+	 erjmp ioibcp
+	pop p,b
+	move a,filbfs(b)	;reinitialize state
+	subi a,1		;sos already done
+	movem a,filbct(b)
+	move a,filbfp(b)
+	movem a,filbpt(b)
+	pop p,c
+cpopji:	pop p,bix
+	ret
+
+ioibcp:	pop p,b
+ioicp:	pop p,c
+	pop p,bix
+	adjstk p,-1
+	jrst ioerp
+
+ioebcp:	pop p,b
+ioecp:	pop p,c
+	adjstk p,-1		;abort caller
+	jrst ioerp
+
+reabuf:	skipe filter(b)		;fill the buffer - delayed error?
+	jrst simerx		;yes - pretend it happened now
+	push p,bix
+	push p,c
+	push p,b
+	hrrz a,filjfn(b)
+	movn c,filpbs(b)
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	move b,filpbp(b)
+	sin%
+	 erjmp saverr		;store error for later
+	pop p,b
+	move a,filbfs(b)
+	subi a,1
+	movem a,filbct(b)
+	move a,filbfp(b)
+	movem a,filbpt(b)
+	pop p,c
+	pop p,bix
+	ret
+
+;We have to delay errors and activate them after the user has seen any
+; characters that have been returned.  Otherwise EOF would come too
+; soon.  Note that the code assumes (implicitly) that reabuf returns
+; something.  So if no bytes have been gotten at all, we have to do
+; the error now - can't delay it.
+saverr:	pop p,b			
+	move t,filbfs(b)	;t _ logical bytes per transfer byte
+	idiv t,filpbs(b)
+	imul c,t		;c _ - logical bytes not transferred
+	add c,filbfs(b)		;c _ bytes transferrred
+	jumpe c,ioicp		;[27] none - immediate error
+	subi c,1		;caller has done sos
+	movem c,filbct(b)
+	move a,filbfp(b)
+	movem a,filbpt(b)	;otherwise normal init.
+	movei a,.fhslf		;save error code for simerr
+	move c,b		;save b ever jsys
+	geter%
+	exch b,c		;c _ error code, fcb back in b
+	hrrzm c,filter(b)
+	pop p,c
+	pop p,bix
+	ret
+
+simerx:	adjstk p,-1		;abort caller
+simerr:	move t,filter(b)	;activate delayed error
+	movem t,filerr(b)	;put in real error place
+	setzm filter(b)		;not delayed anymore
+	jrst ioerpx		;and pretend we just saw it
+
+	subttl buffered I/O - open and close
+
+logopn:	trne g,of%rd		;common openning
+	trnn g,of%wr		;if read and write, can't do it
+	 jrst .+2		;only one, OK
+	  jrst illfn
+	xmovei t,illfn		;make wrong direction illegal (or he
+	skprea			;writing? (might not get the error
+	 movem t,filget(b)	;read illegal    (until fnished the
+	skpwrt			;reading?   (buffer)
+	 movem t,filput(b)
+	ldb a,[fl%buf!filflg(b)] ;number of buffers user wants
+	caig a,0		;must be between 1 and 36
+	 movei a,1		;if 0, use default
+	caile a,^D36		;if too big, use maximum
+	 movei a,^D36
+	move t,a		;now have pages per buffer - get words
+	lsh t,^D9		;t _ words in buffer
+	movem t,filpbs(b)	;filpbs _ words in buffer
+	  ;caller may reset this to bytes in buffer if that is what he wants
+	call alcbuf		;# pages is arg to alcbuf, in A
+	ldb t,[point 6,g,5]	;logical byte size
+	lsh t,^D24		;make byte pointer
+ifn klcpu,<
+	tlo t,440000+bix	;to beginning of word
+> ;ifn klcpu
+ife klcpu,<
+	tlo t,440000		;to beginning of word
+	hrrz a,filbuf(b)	
+	lsh a,^D9
+	hrr t,a
+> ;ife klcpu
+	movem t,filbfp(b)	;store as logical bufer start
+	setzm filbpt(b)		;assume nothing in buffer
+	skprea			;if writing, give a full buffer
+	movem t,filbpt(b)
+	movei t,^D36
+	ldb a,[point 6,g,5]	;computer buffer size in bytes
+	idiv t,a		;t _ bytes per word
+	imul t,filpbs(b)	;t _ bytes in buffer
+	movem t,filbfs(b)	;store as logical size
+	setzm filbct(b)
+	skprea		;if writing, give a full buffer
+	movem t,filbct(b)
+	setzm filter(b)
+	setzm fillct(b)
+	ret
+
+chropn:	skipe filerr(b)		;byte mode I/O open
+	ret			;no-op if error
+	call openfi
+chrop1:	call logopn		;compute logical parameters
+	move t,filbfp(b)	;physical param's = logical ones
+	movem t,filpbp(b)
+	move t,filbfs(b)
+	movem t,filpbs(b)
+	ret
+
+wrdopn:	skipe filerr(b)		;word mode I/O open
+	ret
+	call logopn
+ifn klcpu,<
+	movx t,<point 36,(bix)>
+> ;ifn klcpu
+ife klcpu,<
+	movx t,<point 36,>
+	hrr t,filbix(b)
+> ;ife klcpu
+	movem t,filpbp(b)
+	tlz g,770000
+	tlo g,440000		;set 36 bit bytes
+		;filpbs is left as set by logopn - words in buffer
+	jrst openfi
+
+ifn srisw,<  ;[23]
+;This is part of the SRI kludge.  See DSKLTS for an explanation of the
+;  reason for the kludge.
+
+;device-dependent code to examine the first word to see if line-numbered.
+;  This code is mainly for the use of magtape.  Since it is fairly common
+;  there to open the file, set parameters, and then do the first read, we
+;  have to wait and do the actual test at the first read.  Thus this routine
+;  temporarily changes FILGET to call a routine that tests the first
+;  word, restores FILGET to the right thing, and then calls it.  For the
+;  disk we have to do the actual test at open time, because somebody might
+;  do SETPOS before the first real.  But for disk it is safe because one
+;  can do the test without any sideeffects.  We tried BIN then BKJFN, but
+;  due to a monitor bug that doesn't work for tape.
+wrdlts:	xmovei t,wrdgtt		;[22] special get that does a test first
+	movem t,filget(b)	;[22] booby-trap FILGET
+	ret
+
+;[22] Special routine called for the first GETCH on the file, to see if line
+;[22]    numbered. The order in which things are done in this routine is a bit
+;[22]    more critical than it looks, in order to make error handling work.
+wrdgtt:	xmovei t,getchb		;[22] restore normal reader
+	movem t,filget(b)	;[22]
+	call	reabuf		;[22] get first buffer in
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	move a,filbpt(b)	;[22] pointer to first byte
+	ibp a			;[22] but expected to do ILDB
+	tlz a,-1
+ifn klcpu,<
+	add a,bix
+> ;ifn klcpu
+	move t,(a)		;[22] now have first word of buffer
+	push p,c		;[22] comlts uses t,a,c,d
+	push p,d		;[22]
+	call	comlts		;[22]
+	pop p,d			;[22]
+	pop p,c			;[22]
+	jrst getcb1		;[22] now continue with normal code
+
+>  ;[23] ifn srisw
+
+logclo:	skpwrt			;force buffers
+	 ret			;reading - none
+	move t,filbpt(b)	;zero rest of last word
+;magic code to clear rest of word.  The offset field in the byte
+; ponter now contains no. of bits from the right to be cleared,
+; so we use a new byte ptr with no offset and this as the size.
+	ldb a,[point 6,t,5]
+	dpb a,[point 12,t,11]
+	setz a,			;clear them
+	push p,bix
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	dpb a,t
+	move t,filbfs(b)	;compute no. of bytes to put out
+	idiv t,filpbs(b)	;t _ bytes / transfer byte
+	move a,t		;a _ bytes / transfer byte
+	move t,filbfs(b)	;t _ bytes used
+	sub t,filbct(b)		;t _ bytes remaining
+	jumpe t,cpopji		;if none - done
+	idiv t,a		;t _ transfer bytes remaining
+	skipe a			;round up
+	 addi t,1
+	push p,c
+	push p,b
+	movn c,t		;make sin arg block
+	hrrz a,filjfn(b)
+	move b,filpbp(b)
+	skipe c			;[40] zero is special
+	sout%
+	 chkquo
+	 erjmp ioibcp		;abort caller
+	pop p,b
+	pop p,c
+	pop p,bix
+	move t,filbfp(b)	;set up to make more possible
+	movem t,filbpt(b)
+	move t,filbfs(b)
+	movem t,filbct(b)
+	ret
+
+setpb:	call logclo		;setpos (curpos is curpbx)
+	call logini
+	jrst setpbx
+
+;CURPB is CURPOS for routines that buffer with SIN
+curpb:	move d,b		;get current byte no.
+	hrrz a,filjfn(d)
+	rfptr%
+	 erjrst [seto b,
+		 jrst .+1]
+;reading: RFPTR gives us position at end of buffer.  Have to subtract
+;  number of chars we haven't read yet = FILBCT
+;writing: RFPTR give us position at beginning of buffer.  Have to add
+;  number of chars in the buffer = FILBFS - FILBCT
+	sub b,filbct(d)		;we are buffered ahead - get current
+	skprea(d)		;if writing
+	add b,filbfs(d)		;
+	movem b,1(p)
+	move b,d
+	ret
+
+logini:	skprea			;breakin
+	ret			;no-op on write
+	setzm filbct(b)
+	setzm fillct(b)
+	skipe filter(b)		;if saved error
+	call simerr		;activate it
+	ret
+	
+	subttl buffered I/O - routines for record I/O
+
+;The following routines set up C to indicate the desired
+; transfer, and then call getblp or putblp, which simulate
+; sin and sout.  If an I/O error occurs, getblp or putblp
+; will return with c as at the point of error.  Thus the
+; caller may have some adjustments to do.  The transfer
+; address is in D.
+
+;get
+getb:	movem c,fillct(b)	;assume no. transferred = no. requested
+	movn c,c		;neg count
+	xmovei d,filcmp(b)	;transfer addr
+	call getblp		;sin
+	addm c,fillct(b)	;adjust assumption
+	ret
+
+;put
+putb:	movem c,fillct(b)
+	movn c,c
+	xmovei d,filcmp(b)
+	call	putblp		;sout
+	addm c,fillct(b)
+	ret
+
+;getx
+getxb:	move t,c		;requested upper limit
+	sub c,fillct(b)		;c _ no. needed this time
+	movn c,c		;make aobjn word
+	xmovei d,filcmp(b)
+	add d,fillct(b)		;adjust by no. already done
+	movem t,fillct(b)
+	call getblp		;sin
+	addm c,fillct(b)
+	ret
+
+;Here are the sin/sout simulations.  Note that if there is
+; en I/O error, ioebcp will abort the routine.
+; In that case c will be left negative, and the caller (above)
+; will do the right thing.
+
+;sin
+getblp:	sosge filbct(b)		;sin simulation
+	 call	reabuf
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	ildb a,filbpt(b)
+	movem a,(d)
+	aoj d,
+	aojl c,getblp
+	ret
+
+;sout
+putblp:	sosge filbct(b)		;sout simulation
+	 call	wrtbuf
+	move a,(d)
+ifn klcpu,<
+	move bix,filbix(b)
+> ;ifn klcpu
+	idpb a,filbpt(b)
+	aoj d,
+	aojl c,putblp
+	ret
+
+	subttl initialization
+
+pasif.::hrroi g,(a)		;[6] save return address
+	move f,b		;save flag for checking
+	movem c,stk.bt 		;save # sections for stack [if extended,
+				;if section 0, requested start of stack]
+	setzm in.ddt		;we aren't in PASDDT (yet)
+	hlrz e,.jbsa		;get 1st above low seg
+	trze e,777		;adjust to page boundary
+	 addi e,1000		;we assume .jbff is always even page
+	hrlm e,.jbsa		;and put back adjusted value
+clrlop:	caml e,.jbff		;now clear everything up to .jbff
+	 jrst clrdon
+	seto a,			;unmap the page
+	move b,e
+	lsh b,-9		;make page no.
+	hrli b,.fhslf		;this process
+	setz c,
+	pmap%
+	addi e,1000		;now go to next page
+	jrst clrlop
+
+clrdon:	hlrz e,.jbsa		;get back adjusted top of code
+	movem e,.jbff		;use for .jbff
+	reset%
+
+;if any files are left open, we clear filtst, to indicate that they
+;need reinitialization
+
+	xmovei a,blktab		;loop through all files
+pasin1:	skipe b,(a)		;get the fcb addr there
+	setzm filtst(b)		;and indicate no longer valid
+	setzm (a)		;clear table entry
+	camge a,lstblk		;go to next, if any
+	aoja a,pasin1
+	setzm lstblk		;now nothing in use
+	setom blklck		;restore all to unlocked
+	move a,[blklck,,blklck+1]
+	blt a,blklck+blklen-1	;note - local blt is ok here!
+
+	setzm izer1		;zero interrupt data area
+	move t,[izer1,,izer1+1]
+	blt t,izer99		;note - local blt is ok here too!
+ifn klcpu,<
+	setzm	sectab		;clear the section table
+	move	a,[sectab,,sectab+1]
+	blt	a,sectab+<sn%max/^D18> ;local blt ok here!
+	skipn	[%PASXT]	;does he want extended addressing
+	 jrst	s0.go		;no, skip this
+
+	xhlli	a,.		;get section code is in now
+	hlrz	a,a
+	adjbp	a,[point 2,sectab]
+	movei	t,3
+	idpb	t,a		;be sure the section table knows where the code is...
+	move	c,[exp xmais.+1000000] ;start of extended var's
+	camn	c,[exp .xend+1000000] ;any there?
+	jrst	noxvar		;no - no extended vars
+	hlrz	c,[exp xmais.+1000000] ;first section
+	hlrz	b,[exp .xend+777777] ;last section
+	sub	b,c		;number of sections -1
+	addi	b,1		;number of sections
+	call	chksc.		;[261] see if sections are there
+	 call	getsc.		;[261] no, make them
+	hllz	c,[exp xmais.+1000000] ;start section again
+	came	b,c		;did they give what we asked for?
+	 jrst	novars		;no - we can't run without those
+noxvar:	skipn	b,stk.bt	;get # sections user asked for
+	 jrst	defstk		;he didnt say, use default
+	caig	b,<sn%max-3>	;must have room for 0, code, buffers, and heap
+	 jrst	stk.ok		;it is ok
+	tmsg	<
+%Stack request for extended addressing specifies the number of sections
+and must be between 0 and 34B.  zero indicates the default (12B)
+Will use the default...
+>
+defstk:	movei	b,stk%ns
+stk.ok:	movem	b,stk.bt
+
+	hlli	h,.		;get current section #
+	hlrz	h,h
+	jumpg	h,s1.go1	;if already in a non-zero section skip this
+				; and go create the buffer section
+	movei	b,sn%cod	;create the code section
+	call	s.cre
+
+;map section 0 into the code section
+	move	a,[.fhslf,,0]	; start with page 0
+	move	b,[.fhslf,,sn%cod*1000]	; same pages in section 1
+	move	c,[pm%rwx!pm%cnt!1000]	; thru page 777
+	pmap%
+	 erjmp	s1.err
+	xjrstf	[0		;get out of section 0
+		sn%cod,,s1.go]
+	 erjmp	s1.err
+
+s.cre:	movei	a,(b)		;fixup section map
+	adjbp	a,[point 2,sectab]
+	ildb	t,a		;check for already in use
+	trne	t,1
+	 jrst	in.use		;bad - die
+	movei	t,3
+	dpb	t,a
+	clear	a,		;create one section (sec # in b)
+	hrli	b,.fhslf
+	movx	c,<pm%rwx!1>
+	smap%			;create the section
+	 erjmp	smaper
+	ret
+
+in.use:	errmsg	<Fatal internal error>
+	jrst	sm.err
+
+;this is here for debugging, if you enter ddt from the exec DDT
+;command, this will get you into section 1 again.
+
+s1.ddt::xjrstf	[0
+		1,,770000]
+	erjmp	s1.err
+
+s1.err:	errmsg	<Basic error in multi-section code>
+	call	runer.
+	jrst	endl
+
+novars:	errmsg	<Can't get sections for extended data area.  Either you have too
+many static variables or you have somehow positioned the extended data area
+or the code somewhere odd.  Can't proceed.>
+	jrst	endl
+
+;We are now in section 1.  Change the entry vector to section 1, for
+;restart purposes.
+s1.go:	movei	a,.fhslf	;[261] 
+	xgvec%			;[261]
+	 erjmp s1.go0		;[261] rel 4? can't do it
+	hrli	c,sn%cod	;[261] put in the right section number
+	xsvec%			;[261] now set it
+	 erjmp s1.go0		;[261] hmm...
+s1.go0:
+repeat 0,<	;come on, guys -- not in production programs
+	tmsg	<[using extended addressing]
+>
+>
+	movei	h,sn%cod	;put correct section # in h
+s1.go1:	movem	h,sn.cod
+	jumpe	h,s1.go4
+;here if are in a non-zero section.  Adjust all the dispatch vectors
+;that are going to be refered to with indirects.  We also have to
+;fix up the main entry (the one in DEVTB), because it is going to be
+;used in XBLT, and apparently XBLT doesn't understand about local
+;addresses!
+   ;first loop over all device tables
+	move	a,[adrs <devst>] ;first device table
+s1.go2:	caml	a,[adrs <deven>] ;beyond end?
+	jrst    s1.go3		;yes, end of loop
+	hrlm	h,(a)		;also fix the main table entry
+	move	b,(a)		;this gives the address of the table
+	hrlm	h,(b)		;now put the section in all the entries
+	hrlm	h,1(b)
+	hrlm	h,2(b)
+	hrlm	h,3(b)
+	skipe	4(b)		;if zero, don't relocate it!
+	hrlm	h,4(b)
+	hrlm	h,5(b)
+	aoja	a,s1.go2
+  ;end of loop
+  ;here we make PROTOB+FILCHT be a legal global indirect reference
+  ;  to one of the char tables, indexed by A
+s1.go3:	hrlm	h,protob+filcht	;char table in prototype block
+	hrlzi	a,(<a>B5)	;also put in indexing
+	iorm	a,protob+filcht
+;end of non-zero section code
+s1.go4:	move	b,stk.bt	;# sections for the big stack
+	movei	c,sn%max
+	subi	c,-1(b)
+	camg	c,sn.cod	;above the code?
+	 jrst	[errmsg	<The code must be run BELOW the stack>
+		jrst	endl]
+	call	getsc.		;allocate the sections
+	hlrz	a,b		;get section #
+	add	a,stk.bt
+	caie	a,<sn%max+1>	;is it at the top?
+	 jrst	s1.err		;no - lose
+	movem	b,stk.bt
+	pop	p,a		;return address was in wrong section
+	hrli	a,(h)		;fix section #
+	hrrz	b,p		;get right half of old stack pointer
+	subi	b,(o)		;get current frame size
+	move	o,stk.bt	;beginning of stack sections
+	addi	o,20		;avoid the lowest few words of that section
+	hlrz	p,o		;get section # for stack
+	xor	p,sn.cod	;check for conflict with code section
+	trnn	p,1		;if sections are congruent in pager...
+	 addi	o,200000	; then skip 200 pages to avoid pager refill problems
+	xmovei	p,(o)
+	addi	p,(b)
+	move	a,[sixbit/STOP!!/]	;[50] flag bottom of stack (for FOROTS)
+	movem	a,-4(o)		;[50]
+	movem	o,-3(o)		;store as CURR_LBASIS
+	movem	o,-2(o)		; and as  PREV_LBASIS
+	clearm	(o)
+	call	init.h		;init the heap
+
+s0.go:				;skip to here to avoid extended addressing
+	hlli	a,.		;get current section
+	hlrzm	a,sn.cod	;remember it for everybody who needs to know
+	skipn	[%PASXT]	;did we expect non-extended addressing
+	skipn	a,sn.cod	;but get extended...?
+	 caia			;ok
+	  jrst	[errmsg	<Code built for section 0 cant run in a non-zero section>
+		jrst	endl]
+>;ifn klcpu
+	xmovei	g,(g)		;fixup the return address
+	jsp 	h,pasim.	;init memory manager and interrupts
+;pasim. pushes G onto the stack once it is sure where the stack is
+
+	setzm	tty+1		;note - local blt's are ok here...
+	setzm	tty+filbct
+	move	t,[tty+1,,tty+2]
+	blt	t,tty+filr11-1
+	setzm	ttyout+1
+	move	t,[ttyout+1,,ttyout+2]
+	blt	t,ttyout+filr11-1
+	move	t,[ttynt,,tty+filr11] ;copy special tty routines into tty
+	blt	t,tty+filr99
+	move	t,[ttynt,,ttyout+filr11] ;and ttyout
+	blt	t,ttyout+filr99
+	aos	tty+fileol
+	aos	tty+filbad
+	aos	ttyout+fileof
+	move	t,[ascii /-----/]
+	movem	t,tty+fillnr
+	movem	t,ttyout+fillnr
+	xmovei	t,ttybuf
+	movem	t,tty+filbix
+	movei	t,314157		;magic indicating a valid file
+	movem	t,tty+filtst
+	movem	t,ttyout+filtst
+	move	t,[a,,b]	;clear all the ac's below 15
+	clear	b,
+	blt	t,14
+	clear	t,
+	ret
+;;;	jrst	(g)		;[6] return
+
+	reloc
+
+blklen==140			;there are only 100 jfn's possible
+blklck: block	blklen
+blktab: block	blklen
+lstblk:	block	1
+	subttl critical sections
+
+	intern lockc.,level.,leav.
+	entry enterc,leavec, e.crit
+
+
+izer1:
+level.:	block 1		;current interrupt level
+lockc.:	block 1		;0 or pointer to int. deferral block if in crit. section
+dfins0:	block 1		;interrupt deferral blocks:
+dfins1:	block 1
+dfins2:	block 1
+dfins3:	block 1
+izer99==.-1
+
+
+	reloc
+
+dftab:	adrs dfins0
+	adrs dfins1
+	adrs dfins2
+	adrs dfins3
+
+;routine used by runtimes for critical sections, if already in
+;a critical section just return, otherwise, call enterc, then
+;call routine that called this as a co-routine.  on return fall
+;into leavec.
+
+e.crit:	skipe	lockc.		;already in a critical section?
+	 ret			;yes, real simple
+	push	p,a
+	call	enterc
+	pop	p,a
+	xmovei	t,leavec
+	exch	t,(p)
+	jrst	@t
+
+
+enterc:	move a,level.	;set up int. deferral block
+	move a,dftab(a)
+	movem a,lockc.	;now in critical section
+	ret
+
+leavec:	push p,a
+	setz a,0
+	exch a,lockc.	;out of critical section
+	skipe a		;user is doing leave without enter
+	skipn (a)	;any deferred interrupt?
+	 jrst apopj	;no - normal exit
+	push p,b
+	move b,(a)	;deferred interrupts
+	setzm (a)	;zero for next use
+	movei a,.fhslf	;this job
+	iic%
+leav.:	pop p,b
+apopj:	pop p,a
+	ret
+subttl	Routines for normal user use
+
+;procedure getpages(howmany:integer;var pagenum:integer; var:page:^realpage);
+;b - number of pages to get
+;c - place to put page no.:
+;d - place to put addr.
+getpag::move a,b		;number of pages
+	call getpg.		;actually get page - addr in a
+	hrrzm a,(c)		;return page #
+	tlz a,777777		;clear out LH (count)
+	lsh a,9			;[46] return address
+	movem a,(d)
+	ret
+
+;procedure relpages(howmany:integer;pagenum:integer);
+;b - number of pages to return
+;c - page to return
+relpag::caile	b,0		;check args - count GT 0
+	caig	c,0		;page number GT 0
+	 jrst	illpag
+	move	d,c
+	add	d,b		;page + count  LE max
+	cail	b,40000		;[46]
+	 jrst	illpag
+	move	a,c		;where rlpag wants it
+	hrl	a,b		;number to return
+	jrst	relpg.
+
+illpag:
+	errmsg	<Relpages: page numbers must be 1 to 37777B>
+	jrst endl
+subttl	section manager
+ifn klcpu,<
+comment	\
+
+	This section manager is intended to run ONLY on 2060 systems,
+so there is no need to worry about KL-only instructions.  I hope to
+be able to throw this code away some day, after DEC releases some OTS
+which includes a section manager (hopefully FOROTS).  The idea is to
+be able to allocate one or more sections starting at the section of
+your choice (or the highest possible section if you dont specify one).
+\
+
+;procedure getsections(howmany: integer;
+;		       var sectionnum: integer;
+;		       var section: ^realpage);
+;b - number of sections to get
+;c - place to put section no.: (also suggested section #)
+;d - place to put addr.
+
+getsec::skipn	sn.cod		;extended addressing?
+	 jrst	[errmsg	<GETSECtions not allowed in single section programs>
+		jrst	endl]
+	caile	b,0		;legal # of sections
+	cail	b,sn%max
+	 jrst	illsec		;no...
+	push	p,c
+	push	p,d
+	skipl	c,(c)		;get suggested section
+	 caile	c,sn%max	;legal?
+	  clear	c,		;no, ignore it.
+	call	getsc.
+	pop	p,d
+	pop	p,c
+	hlrzm	b,(c)		;return section number
+	movem	b,(d)		;and pointer
+	ret
+
+;see whether a group of sections exist already
+; b - # sections
+; c - first section
+;preserves b and c, changes a
+;skip if they do, and sets B the same way getsc. would set it
+chksc.:	push p,b		;[261]
+	push p,c		;[261]
+	movn b,b		;[261] c _ aobjn pointer to sections
+	hrl c,c			;[261]
+chksc1:	move a,c		;[261] get section number
+	hrli a,.fhslf		;[261] this fork
+	rsmap%			;[261] exist?
+	 erjmp chkscx		;[261] rel 4? - hard to say what to do
+	jumpl a,chkscx		;[261] none exists
+	aobjn c,chksc1		;[261] next section
+	move a,(p)		;[261] first section
+	move b,-1(p)		;[261] number of sections
+	adjbp a,[point 2,sectab] ;[261] point into section alloc table
+chksc2:	ildb t,a		;[261] check for in use
+	trne t,1		;[261]
+	 jrst chkscx		;[261] yes, in trouble
+	movei t,3		;[261] code that now in use
+	dpb t,a			;[261]
+	sojg b,chksc2		;[261] any more?
+	pop p,c			;[261]
+	pop p,b			;[261]
+	hrlz b,c		;[261] say we used desired section
+	aos (p)			;[261] it worked
+	ret			;[261]
+
+chkscx:	pop p,c			;[261]
+	pop p,b			;[261]
+	ret			;[261]
+
+;internal section allocator
+; b - # sections
+; c - suggested section #
+;returns with address of first section in b
+getsc.::move	f,b		;save args
+	skipg	e,c
+	 jrst	gs.bot		;no suggestion, try from bottom up
+try.dn:	jumple	e,tryhrd	;drop down one at a time...
+	call	trysec
+	 soja	e,try.dn	;work down
+	jrst	gotsec		;we got one...
+
+gs.bot:	aos	e		;try next higher
+	caile	e,sn%max	;gone too far?
+	 jrst	tryhrd		;yes, try all from top down
+	call	trysec		;try there
+	 jrst	gs.bot
+	jrst	gotsec		;we won...
+
+tryhrd:	movei	e,sn%max	;go to the high end
+	subi	e,-1(f)		;back off enough to make it possible
+gs.lp2:	jumple	e,gs.ful
+	call	trysec		;try there
+	 soja	e,gs.lp2	;no, try one section lower
+gotsec:	movei	b,(e)		;first section
+	movei	d,(f)		;# sections
+cs.lp:	call	s.cre		;create one section
+	aos	b		;increment section #
+	sojg	d,cs.lp		;create them all
+	hrlzi	b,(e)		;return pointer to section in b
+	ret
+	
+;see if (f) contiguous sections starting with (e) are available
+trysec:	movei	b,(f)		;get count
+	movei	a,(e)		;and starting section
+	adjbp	a,[point 2,sectab]
+ts.lp:	ildb	t,a
+	trne	t,1		;allocated?
+	 ret			;yes, too bad
+	sojg	b,ts.lp		;no, keep trying
+	aos	(p)		;yes, give skip return
+	ret
+
+gs.ful:	move	t,(p)		;get callers PC
+	call	memfu.		;we failed!
+	movei	b,nil
+	ret
+
+;procedure relsections(howmany:integer;sectionnum:integer);
+;b - number of sections to return
+;c - section to return
+
+relsec::caile	b,0		;legal # of sections
+	cail	b,sn%max
+	 jrst	illsec		;no...
+	caile	c,0		;legal starting section?
+	caile	c,sn%max
+	 jrst	illsec
+	movem	b,g		;save count
+	movem	c,f		;save starting section
+	addi	c,-1(b)
+	caile	c,sn%max	;legal ending section?
+	 jrst	illsec
+	seto	a,		;delete the sections
+	movei	b,(f)		;first section #
+	hrli	b,.fhslf
+	movei	c,1
+	movei	d,(e)		;total # sections to delete
+ds.lp:	smap%			;delete one at a time (rel 4 bug)
+	 erjmp	smaper
+	aos	b		;increment section #
+	sojg	d,ds.lp
+
+	movei	b,(f)		;get count
+	movei	a,(e)		;first section #
+	adjbp	a,[point 2,sectab]
+rs.lp:	ildb	t,a		;get allocated/created bits for this section
+	caie	t,3		;both set?
+	 jrst	secerr		;no - internal error
+	movei	t,2		;created but not allocated
+	dpb	t,a
+	sojg	b,rs.lp		;get all the sections
+	ret
+
+illsec:	errmsg	<Illegal argument>
+	jrst	sm.err
+
+secerr:	errmsg	<Internal error>
+sm.err:	tmsg	< in call to section manager >
+	move	t,(p)
+	call	runer.
+	jrst	endl.
+
+smaper:	errmsg	<SMAP% error>
+	jrst	sm.err
+>;ifn klcpu
+ife klcpu,<
+getsec::
+relsec::errmsg	<Extended addressing is available only on 2060 systems>
+	move	t,(p)
+	call	runer.
+	jrst	endl.
+>;ife klcpu
+	prgend
+title	NEW	; fake entry in case dispose not included
+	search	pasunv
+	entry	new
+	extern	getnew
+new=getnew
+	prgend
+	title	DANGER - routine for dummy label when pasnum not loaded
+
+	entry	safbeg,safend
+
+safbeg::block 0
+safend::block 0
+
+	end

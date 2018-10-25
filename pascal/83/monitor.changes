@@ -1,0 +1,81 @@
+This file contains the patches needed to use extended addressing on
+Tops-20 version 4.  Actually only the first patch is strictly
+required.  The second one fixes a bug that you can survive with,
+but it will be inconvenient at times if you don't fix it.  In
+version 5 and later, these patches will not be needed.
+
+---------------------------------------------------------------------
+
+Patch 1:  To turn on extended addressing.  All of the code needed to
+	do extended addressing is in the monitor already.  However
+	in order to use it, you must use the SMAP% jsys.  The code for
+	this jsys is also in the monitor, but DEC left the address of
+	the code out of a JSYS dispatch table.  That is, the table
+	entry for this jsys is the address of an error routine (for
+	undefined jsyses) instead of the address of the actual code.
+	So to turn on the jsys, all we have to do is change that
+	entry in the dispatch table.
+
+Alternative 1:  Do it in the source and rebuild the monitor.  
+
+In MONSYM.MAC, change DEFJS SMAP,767,MSEC1,NIM to
+	DEFJS SMAP,767,MSEC1
+	(Note: be sure to recompile LDINIT using the new MONSYM)
+
+Alternative 2:  Do it in DDT.  Following the normal instructions
+for patching the monitor using your favorite kind of DDT.  We
+normally use FILDDT.
+
+@FILDDT
+FILDDT>GET SYSTEM:MONITR.EXE/PATCH
+JSTAB+767/	4001,,UJSYS	4001,,.SMAP
+^Z
+
+You may want to make a new copy of MONITR.EXE before doing this.
+
+-----------------------------------------------------------------------
+
+Patch 2:  This fixes a race condition for fork lock:
+
+Alternative 1:  Here is the fix in source.  This was supplied by one
+of the monitor developers at DEC, and has been tried at many sites.
+
+File 1)	FORK.MAC.3,29-May-81 09:27:33
+File 2)	FORK.DEC.1,24-Jan-80 09:39:59
+
+1)46		ACVAR <W1,W2>		;[163]
+1)		SETZM W2		;[163] INDICATE NESTING NOT ALLOWED
+1)		JRST FLOCK1
+1)	;HERE TO ALLOW NESTING OF THE LOCK
+1)	FLOCKN::ACVAR <W1,W2>		;[163]
+1)		SETOM W2		;[163] INDICATE NESTING ALLOWED
+1)	FLOCK1:	CSKED			;BE CRITICAL IF LOCK WORKS
+****
+2)46		ACVAR <W1>
+2)		SETZM W1		;INDICATE NESTING NOT ALLOWED
+2)		JRST FLOCK1
+2)	;HERE TO ALLOW NESTING OF THE LOCK
+2)	FLOCKN::ACVAR <W1>
+2)		SETOM W1		;INDICATE NESTING ALLOWED
+2)	FLOCK1:	CSKED			;BE CRITICAL IF LOCK WORKS
+**************
+1)46		JRST [	HRR W2,FORKN	;[163] GET OUR JOB-WIDE FORK HANDLE
+1)			MOVEM W2,FLKOWN	;[163] SAVE IT AS THE OWNER
+1)			SKIPE FLKCNT	;IF NOT ZERO, SOMETHING IS WRONG
+****
+2)46		JRST [	HRR W1,FORKN	;GET OUR JOB-WIDE FORK HANDLE
+2)			MOVEM W1,FLKOWN	;SAVE IT AS THE OWNER
+2)			SKIPE FLKCNT	;IF NOT ZERO, SOMETHING IS WRONG
+**************
+
+Alternative 2:  DDT.  Here is the patch in DDT form.
+
+FLOCK/		JSP CX,.SAV1	JSP CX,.SAV2
+FLOCK+1/	SETZM Q1	SETZM Q2
+
+FLOCKN/		JSP CX,.SAV1	JSP CX,.SAV2
+FLOCKN+1/	SETOM Q1	SETOM Q2
+
+FLOCK1 2/	JRST FKCTNZ+7
+FKCTNZ+7/	HRR Q1,FORKN	HRR Q2,FORKN
+FKCTNZ+10/	MOVEM Q1,FLKOWN	MOVEM Q2,FLKOWN

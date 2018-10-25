@@ -1,0 +1,76 @@
+	title PFORMS - subroutines for PFORM
+
+	search pasunv
+
+ifn tops10,< search uuosym>
+ife tops10,< search monsym, macsym>
+
+	entry rescan,reljfn,getnam
+
+
+	twoseg 400000
+
+ifn tops10,<
+
+rescan:	movei a,0		;nothing
+	ttcall 10,[exp 1]	;rescan and skip if nothing there
+	movei a,1		;something
+	movem a,1(p)
+	popj p,
+
+reljfn:	jrst rclose##
+
+;b - fcb
+;c - string destination
+getnam:	movei d,filnam(b)	;d _ ptr to name
+	hrli d,440600		;sixbit
+	hrli c,440700		;output is ascii
+	movei a,6		;six char's
+getnml:	jumpe a,getnmx		;done when no more char's
+	soj a,
+	ildb t,d
+	jumpe t,getnml		;ignore spaces
+	addi t,40		;convert to ascii
+	idpb t,c
+	jrst getnml
+getnmx:	setz t,			;make asciz
+	idpb t,c
+	popj p,
+
+> ;ifn tops10
+
+ife tops10,<
+ife tenex,<
+rescan:	movei a,0
+	rscan%
+	movem a,1(p)
+	ret
+> ;ife tenex
+
+ifn tenex,<
+rescan:	setzm 1(p)
+	ret
+> ;ifn tenex
+
+reljfn:	hrrz a,filjfn(b)
+	rljfn%
+	 jfcl
+	ret
+
+
+getnam:	
+ifn klcpu,<
+	xmovei	bix,(c)
+	movx	a,<point 7,(bix)>
+> ;ifn klcpu
+ife klcpu,<
+	movx	a,<point 7,>
+	hrr	a,c
+> ;ife klcpu
+	move	b,filjfn(b)
+	movsi	c,(1B8)
+	jfns%
+	ret
+> ;ife tops10
+
+	end

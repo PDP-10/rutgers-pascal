@@ -1,0 +1,238 @@
+	title zerovr - module to set floating point error results to 0
+
+	search	monsym, macsym
+comment %
+
+********************************************
+WARNING: This routine uses KL instructions
+********************************************
+
+This routine is designed to be called at interrupt level to clear out
+the result of an operation that overflowed, underflowed, etc.  It
+sets the result to zero.  The easiest way to use it is:
+
+  psidefine(6,1,zerovr);
+  psidefine(7,1,zerovr);
+  psienable(6);
+  psienable(7);
+
+This will result in all arithmetic errors turning into zero.  If you
+want to print messages, count errors, etc., you should write your
+own interrupt handler, which would then call this one to zero out the
+result.  Note that your procedure should accept at least 5 parameters,
+and pass them on to this when it calls it.  If you only want to worry
+about floating point errors, consider just activating channel 7.
+
+If the overhead involved in Pascal interrupt handling is too much for
+you (e.g. you expect problems in an inner loop), you should instead
+explicitly test for errors and do your own recovery in the program.
+E.g.
+   x := x/y;
+   if aritherr then x := 0;
+
+Aritherr can be defined as follows:
+	  twoseg 400000
+	  entry arithe
+	  p==17
+  arithe: setzm 1(p)	;assume no error
+	  jfcl 17,.+2	;test for any error
+	  popj p,	;none
+	  aos 1(p)	;error - return true
+	  popj p,
+	  end
+
+The jfcl 17, tests for all error bits.  You can of course choose to
+test for only certain ones.  If use this method you should obviously
+disable the usual Pascal arithmetic error trap.  Either run with
+/NOCHECK or (*$C-*), which will disable all checking, or if you
+prefer to get the usual bounds checking, etc., just do
+    psidisable(6);  psidisable(7)
+to turn off the arithmetic traps.
+
+When you call psidefine to set up zerovr, zerovr will replace the
+default Pascal arithmetic trap, so you do not need to (indeed should
+not) disable channels 6 and 7 when you use zerovr.
+
+For the ultimate in arithmetic error processing, see the module
+CALFOR, which will allow you to call the Fortran arithmetic error
+handler.
+%
+
+entry zerovr
+
+	twoseg 400000
+
+	a==1
+	b==2
+	c==3
+	d==4
+	e==5
+	f==6
+	p==17
+
+;where called by the interrupt procedure, arguments are set up:
+;	c - old PC
+;	e - where the saved old PC is
+;	f - where the saved AC's are
+
+zerovr:	move a,-1(c)	;interrupted instruction
+	move b,(c)	;next instruction
+	ldb d,[point 9,b,8] ;op code
+	cain d,(<jfcl>_-9) ;unless next instruction is jfcl
+	jrst isjfcl	;in which case we may not want to do anything
+jfclOK:	hrrzs (e)	;clear error bits from PC if not jfcl
+;the place we have to clear depends upon the operation that blew up
+;so the following code uses a table with one entry for each opcode,
+;specifying a routine to use.
+	ldb b,[point 9,a,8] ;op code of one that blew
+	cail b,110	;if not 110-377
+	caile b,377
+	popj p,		;also ignore
+	subi b,110	;get offset into dispatch table
+	adjbp b,[point 6,zertab,5] ;get pointer to routine code
+	ldb c,b		;c _ routine code
+	jrst @zerdis(c)	;go to routine
+
+;this code is called when the next instruction after the one that
+;blew up is a jfcl.  The idea is that if the user is about to test
+;for an error bit, we should let him handle it himself.  But we first
+;check to be sure the error is one of the ones he is testing for.
+isjfcl:	ldb d,[point 4,b,12] ;look at the ac field of the jfcl - bits to test
+	lsh d,^D32	;align with bits in PC
+	tdnn d,c	;do we have any of the bits the jfcl is going to test?
+	jrst jfclOK	;no - ignore the jfcl
+	and c,d		;clear out the other bits
+	hllm c,(e)	;in saved PC, so he doesn't get any he can't handle
+	popj p,		;yes - let the user handle it
+
+;This is a dispatch table of routines to go to for various kinds of
+;instruction.
+zerdis:	ifiw	clrn		;noop
+	ifiw	clra		;clear one AC
+	ifiw	clra2		;clear two AC's
+	ifiw	clra4		;clear four AC's
+	ifiw	clrm		;clear memory
+	ifiw	clrm2		;clear two memory loc's
+	ifiw	clram		;clear AC and memory
+	ifiw	clra2m		;clear two AC's and memory
+
+;nothing
+clrn:	popj p,
+
+;clear one AC
+clra:	ldb b,[point 4,a,12] ;ac field
+	add b,f		;where it is stored
+	setzm (b)	;clear ac
+	popj p,
+
+;clear AC and AC+1
+clra2:  ldb b,[point 4,a,12] ;ac
+	move c,b
+	add c,f		;relocate to where stored
+	setzm (c)
+	addi b,1	;next ac
+	andi b,17
+	add b,f
+	setzm (b)
+	popj p,
+
+;clear AC to AC+3, handling wraparounds
+clra4:	ldb a,[point 4,a,12] ;ac
+	move b,a
+	add b,f
+	setzm (b)
+	movei c,3	;three more ac's
+clra4l:	addi a,1
+	move b,a
+	andi b,17
+	add b,f
+	setzm (b)
+	sojg c,clra4l
+	popj p,
+
+;clear effective address
+clrm:	ldb b,[point 4,a,17] ;index reg
+	tlz a,777757	;now clear op code,ac, and index from instruction
+	caie b,0		;unless no index reg
+	 tlo a,c		;modify to use index c
+	tlo a,(xmovei b,)	;movei
+	add b,f		;relocate to addr of index reg used
+	move c,(b)	;and get contents of index reg
+	xct a		;do it - b now has addr of thing to be changed
+	txnn b,<777776777760> ;is it an AC?
+	jrst clrac	;if it is an ac, it is special
+	setzm (b)	;no - just do it
+	popj p,
+
+clrac:	move c,b	;can't garbage b
+	add c,f		;relocate into user ac's
+	setzm (c)	;clear it
+	popj p,
+
+;clear effective address and E+1
+clrm2:	pushj p,clrm	;do first one
+	aos b		;now go to next
+	txnn b,<777776777760> ;is it an AC?
+	jrst clrac
+	setzm (b)
+	popj p,
+
+;clear AC and E
+clram:	pushj p,clra
+	pushj p,clrm
+	popj p,
+
+;clear AC, AC+1, and E
+clra2m:	pushj p,clra2
+	pushj p,clrm
+	popj p,
+
+;The following codes are used in the table of opcode data.  They are
+;offsets in the dispatch table above. 
+	n==0
+	a==1
+	a2==2
+	a4==3
+	m==4
+	m2==5
+	am==6
+	a2m==7
+
+;here we have a table of what to clear for each instruction
+; that can cause overflow/underflow, etc.  It simply indicates where
+; the results of that instruction go.  This table was made up when I
+; was half asleep, so please report any errors in it.  Its accuracy
+; is obviously crucial to the behavior of this code.
+zertab:	byte (6)a2,a2,a2,a2,a2,a2	;110-115
+	byte (6)a4,a4,n,a2,a,n		;116-123
+	byte (6)n,m2,a,a,a2,am		;124-131
+	byte (6)a,n,n,n,n,n		;132-137
+	byte (6)a,a2,m,am,a,a		;140-145
+	byte (6)m,am,a,a2,m,am		;146-153
+	byte (6)a,a,m,am,a,a2		;154-161
+	byte (6)m,am,a,a,m,am		;162-167
+	byte (6)a,a2,m,am,a,a		;170-175
+	byte (6)m,am,n,n,n,n		;176-203
+	byte (6)n,n,n,n,a,a		;204-211
+	byte (6)m,m,n,n,n,n		;212-217
+	byte (6)a,a,m,am,a2,a2		;220-225
+	byte (6)m,a2m,a2,a2,m,a2m	;226-233
+	byte (6)a2,a2,m,a2m,n,n		;234-241
+	z				;242-247
+	z				;250-255
+	z				;256-263
+	byte (6)n,n,n,n,a,a		;264-271
+	byte (6)m,am,a,a,m,am		;272-277
+	z				;300-305
+	z				;306-313
+	z				;314-321
+	z				;322-327
+	z				;330-335
+	byte (6)n,n,a,a,a,a		;336-343
+	byte (6)a,a,a,a,m,m		;344-351
+	byte (6)m,m,m,m,m,m		;352-357
+	byte (6)a,a,a,a,a,a		;360-365
+	byte (6)a,a,m,m,m,m		;366-373
+	byte (6)m,m,m,m,n,n		;374-377
+
+	end

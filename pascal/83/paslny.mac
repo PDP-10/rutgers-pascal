@@ -1,0 +1,197 @@
+	title PASLNX - paslnk for rescan version of Pascal
+
+	twoseg
+
+	search monsym,pasunv
+
+	extern resetf,clofil,quit
+	entry pushf,popf,runlink,clribf,curnam,ctpcom,idcomp
+	extern	init.b
+
+	reloc 0
+oldf:	block filcmp+1
+oldfen=.-1
+
+	reloc 400000
+
+pushf:	hrl a,b			;copy old fcb
+	hrri a,oldf
+	blt a,oldfen
+	pushj p,init.b		;reinit the fcb
+	setz a,			;text file
+	seto e,			;[2] so we can see errors
+	setzb f,g		;[2]
+	movei h,30		;[2] let us see open errors and EOL char
+	pushj p,resetf
+	popj p,
+
+popf:	push p,b
+	setz c,
+	pushj p,clofil
+	pop p,b
+	hrli a,oldf
+	hrr a,b
+	blt a,filcmp(b)
+	popj p,
+
+clribf:	movei a,.priin
+	cfibf
+	popj p,
+
+runlink:movsi a,(gj%old!gj%sht)
+	hrroi b,[asciz /sys:link.exe/]
+	gtjfn
+	  jrst quit
+	move 17,a		;where to put jfn
+	movei	a,.fhslf	;clear SWTRP if any from this fork
+	movei	b,.swart	;  set function
+	movei	c,0		;  0 means clear it
+	swtrp%
+	 erjmp	.+1		;not impl?
+	seto a,			;remove pages
+	MOVSI	B,.FHSLF	; FREOM THIS FORK
+	MOVE	C,[PM%CNT+1000]	; ALL 1000 PAGES
+	MOVE	D,[RUNCOD,,10]	;MOVE REST OF CODE TO
+	BLT	D,16		; ACS 10-16
+	JRST	10		;DO IT THERE
+RUNCOD:	PMAP			;DELETE ALL PAGES FROM MAP
+	MOVSI	A,.FHSLF	;GET INTO THIS FORK
+	HRR	A,17		;FROM THIS FILE
+	GET			;GO GET IT
+	MOVEI	A,.FHSLF	;OUR FORK
+	GEVEC			;GET FORKS ENTRY VECTOR
+	JRST	1(B)		;START FORK
+
+;curname(file,string)
+;  put current file spec into string
+;b - FCB
+;c - string addr
+;d - string length
+
+curnam:	addi d,4		;d _ string length in words
+	idivi d,5
+	move t,[ascii /     /]	;now init string to blanks
+	movem t,(c)
+	hrli a,(c)
+	hrri a,1(c)
+	add d,c
+	blt a,-1(d)
+	hrro a,c		;now do jfns
+	hrrz b,filjfn(b)
+	move c,[exp 111110000001] ;full file spec
+	setz d,
+	jfns
+	movei t," "		;put blank in over null at end
+	idpb t,a
+	popj p,
+
+;Procedures to compare names - in assembly language for speed, since
+;symbol table lookup tends to be critical.  I have traded space for
+;speed - this code is fairly long, but should be on average very fast.
+;return -1, 0, or +1 depending upon whether 1st arg is less, equal
+;or greater than second.
+
+;CTP: 1st 10 char's - 2 words
+;     LH - count of chars,, RH - pointer to extra words
+;IDLEN - count of char's
+;ID - 1st 10 char's, as 2 words passed by value
+;IDEXT - addr of extra words
+
+;CTPCOM(CTP1,CTP2) - two CTP's.
+
+ctpcom:	setzm 1(p)		;assume equal
+
+;counts
+	hlrz t,2(b)		;count from first
+	hlrz a,2(c)		;count from second
+	camge t,a
+	jrst less		;less
+	camle t,a
+	jrst great		;greater
+
+;first two words
+ife KACPU,<
+	dmove d,(b)		;now the values
+>
+ifn KACPU,<
+	move d,(b)
+	move e,1(b)
+>
+	camge d,(c)
+	jrst less
+	camle d,(c)
+	jrst great
+	camge e,1(c)
+	jrst less
+	camle e,1(c)
+	jrst great
+	caig t,^D10		;more data?
+	popj p,			;no - done
+
+;other words - char count is in T, pointers in B,C
+	hrrz b,2(b)
+	hrrz c,2(c)
+	subi t,^D10
+
+ccoml:	move d,(b)
+	camge d,(c)
+	jrst less
+	camle d,(c)
+	jrst great
+	subi t,5
+	addi b,1
+	addi c,1
+	jumpg t,ccoml
+	popj p,
+
+less:	sos 1(p)
+	popj p,
+
+great:	aos 1(p)
+	popj p,
+
+
+
+;IDCOMP(CTP,LEN,ID,IDEXT) - CTP with global
+;	b    c   d&e   f   g - free
+idcomp:	setzm 1(p)		;assume equal
+
+;counts
+	hlrz t,2(b)		;count from first
+	camge t,c
+	jrst less		;less
+	camle t,c
+	jrst great		;greater
+
+;first two words
+	camle d,(b)
+	jrst less
+	camge d,(b)
+	jrst great
+	camle e,1(b)
+	jrst less
+	camge e,1(b)
+	jrst great
+	caig t,^D10		;more data?
+	popj p,			;no - done
+
+;other words - char count is in T, pointers in B,F
+	hrrz b,2(b)
+	subi t,^D10
+
+icoml:	move d,(b)
+	camge d,(f)
+	jrst less
+	camle d,(f)
+	jrst great
+	subi t,5
+	addi b,1
+	addi f,1
+	jumpg t,icoml
+	popj p,
+
+
+if2,<	purge get>
+
+	end
+

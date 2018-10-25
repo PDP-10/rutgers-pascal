@@ -1,0 +1,30 @@
+	title passet - character map for set references
+
+	twoseg 400000
+
+	entry .stchm
+
+;We apologize for the inelegancy of this table, but it was
+; constructed mechanically from the corresponding table in
+; pascmp.pas.  This agreement is more important than elegance.
+;This table lists the index in the two word bit array for each
+; character of a set of char.
+
+.stchm:	exp 0,0,0,0,0,0,0,0		;0 - 7
+	exp 0,1,0,0,0,0,0,0		;10 - 17
+	exp 0,0,0,0,0,0,0,0		;20 - 27
+	exp 0,0,0,0,0,0,0,0		;30 - 37
+	exp 2,3,4,5,6,7,10,11		;40 - 47
+	exp 12,13,14,15,16,17,20,21	;50 - 57
+	exp 22,23,24,25,26,27,30,31	;60 - 67
+	exp 32,33,34,35,36,37,40,41	;70 - 77
+	exp 42,43,44,45,46,47,50,51	;100 - 107
+	exp 52,53,54,55,56,57,60,61	;110 - 117
+	exp 62,63,64,65,66,67,70,71	;120 - 127
+	exp 72,73,74,75,76,77,100,101	;130 - 137
+	exp 102,43,44,45,46,47,50,51	;140 - 147
+	exp 52,53,54,55,56,57,60,61	;150 - 157
+	exp 62,63,64,65,66,67,70,71	;160 - 167
+	exp 72,73,74,103,104,105,106,107;170 - 177
+
+	end

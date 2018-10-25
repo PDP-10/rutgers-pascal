@@ -1,0 +1,48 @@
+With edit 201, the I/O system has been redone to handle internal files.
+There are some incompatibilites:
+  - When you are end of line, the character in INPUT^ is
+	now a blank, as required by the standard.  Previously
+	you saw the actual end of line character.  To see
+	the actual character, you must turn on an option.
+	If you open the file INPUT via the PROGRAM statement,
+	specify PROGRAM FOO(INPUT:#).  The :# specifies the
+	option to see end of line.  (It way be combined with
+	/ for interactive, e.g. PROGRAM FOO(INPUT:/#)    )
+	If you open the file via a RESET, specify /E:
+	RESET(INPUT,'foo.bar','/e').  If you also want it
+	openned interactively, specify /e and /i:
+	RESET(INPUT,'foo.bar','/i/e').  The old method of
+	putting magic bits in magic arguments will still work,
+	but the string argument specifying switches is clearly
+	much better.  (Probably magic characters after INPUT:
+	will also be replaced by a similar list of switches
+	in the future.) Other useful switches are:
+	/o - I will handle open errors myself (Pascal sets EOF)
+	/d - I will handle data transmission errors myself
+	/f - I will handle format errors in read myself
+	/u - turn all lower case into upper case
+	/b:xx - byte size xx used in the OPENF
+  - When you do not specify a file name at all, e.g.
+	RESET(INFILE), where INFILE was not listed in the
+	PROGRAM statement, the system used to use the Pascal
+	variable name for the file name, e.g. DSK:INFILE..
+	Such cases are now treated as "internal files".  Pascal
+	GENSYM's a file name, and the file is deleted when you
+	exit from the lexical context in which the variable
+	was defined (i.e. exit from the block, even by non-local
+	GOTO, or DISPOSE of the record if the file is part of
+	a record).
+  - The default for BREAK and BREAKIN has been changed to OUTPUT
+	and INPUT.  Previously the default was TTY.  I am trying
+	to deemphasize the standard file TTY, since it is not
+	present in standard Pascal.  Furthermore, BREAK(TTY) and
+	BREAKIN(TTY) are essentially no-ops, so this does seem an
+	odd default.
+The major addition is that files can now be used in any reasonable
+context, i.e. as parts of arrays, records, etc.  However FILE OF
+FILE is still not implemented.
+
+This version of Pascal should be completely upwards-compatible
+with Jensen and Wirth, except for quantitative limitations
+(nesting limits of blocks, maximum length of a routine, etc.).
+Please report any cases where it is not.

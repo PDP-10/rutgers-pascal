@@ -1,0 +1,104 @@
+	title PASSTR - string I/O for pascal
+
+	twoseg	400000
+
+	search pasunv,monsym,macsym
+	sall
+	.direc	sfcond
+	.direc	flblst
+
+define xblt(ac,foo),<extend ac,[020B8]>
+
+	extern getchr,illfn,getlnx,putlnx,putpgx,clofil,norchx
+ifn klcpu,<extern sn.cod>
+	entry stset.,stwr.
+
+	reloc 0
+
+strnt:	adrs <strget,strput,getlnx,putlnx,0,.+1>
+strntx:	adrs <illfn,illfn,putpgx,illfn,illfn,cpopj,cpopj,cpopj>
+
+	reloc
+
+strget:	sosge filbct(b)
+	 jrst strend
+	move bix,filbix(b)
+	ildb a,filbpt(b)
+	jumpe a,strget
+	jrst getchr
+
+strput:	sosge filbct(b)
+	 jrst strend
+	move a,filcmp(b)
+	move bix,filbix(b)
+	idpb a,filbpt(b)
+cpopj:	popj p,
+
+stset.:	movei a,0		;normal eof
+	pushj p,stropn
+	jrst @filget(b)
+
+stwr.:	movei a,1		;normal eof
+	;jrst stropn
+
+stropn:	skipe filclo(b)		;any closing needed?
+	pushj p, [ push p,a
+		   setz c,		;yes - do it
+	           pushj p,clofil
+		   pop p,a
+		   ret]
+	movem a,fileof(b)
+	trc a,1
+	movem a,filbad(b)
+	setzm fileol(b)
+	movei t,fl%fme		;allow format error
+	movem t,filflg(b)
+ifn klcpu,<
+	skipe sn.cod		;XBLT if extended
+	jrst strop1
+> ;ifn klcpu
+	move t,[ifiw norchx(a)]
+	movem t,filcht(b)
+	hrli t,strnt		;dispatch addresses we want
+	hrri t,filr11(b)	;whre to copy vector
+	blt t,filr99(b)		;local blt ok here!
+	popj p,
+
+ifn klcpu,<
+
+;dispatch vector handling for extended addressing
+;first time have to set up section number.  We have check for the
+; right section number each time, since it is possible to save this
+; program and then run it in a different section.
+strop1:	xmovei t,strntx		;init section number
+	camn t,strnt+5		;already set up?
+	jrst strop2		;yes - forget this
+	hllm t,strnt
+	hllm t,strnt+1
+	hllm t,strnt+2
+	hllm t,strnt+3
+	hllm t,strnt+5
+
+;here the rest of the time
+strop2:	xmovei t,norchx		;assume no lower case mapping
+	tlo t,(<a>B5)		;put indexing on left end
+	movem t,filcht(b)
+	movei t,filr99-filr11+1
+	xmovei a,strnt		;dispatch addresses we want
+	push p,b
+	xmovei b,filr11(b)	;place to put it in FCB
+	xblt t,
+	pop p,b
+	ret
+
+> ;ifn klcpu
+
+strend:	move t,filbad(b)
+	movem t,fileof(b)
+	movem t,fileol(b)
+	setzm filcmp(b)
+	movei t,iox4
+	movem t,filerr(b)
+	popj p,
+
+	end

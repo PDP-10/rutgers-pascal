@@ -1,0 +1,275 @@
+	title PASFOR - interface to allow Fortran I/O from Pascal
+
+
+repeat 0,<
+	
+   procedure forinit(s:integer); extern;
+   procedure forexit; extern;
+   procedure forfix; extern;
+
+Before calling the first fortran routine, call forinit.  The
+argument is the amount of buffer space to allocate to Fortran.  Under
+normal circumstances, 1000 should be enough.  3000 seems an upper
+bound.
+
+After calling the last Fortran routine, call forexit.  This will
+close all fortran files and kill the emulator.
+
+Call FORFIX on tops-20 after packages that expand core to get
+working space and then contract it back to where it started, e.g.
+SORT.  (Actually, SORT itself can't be called directly from
+Pascal.  It should be called from a Fortran subroutine.  It
+checks it argument type too strictly, so it cannot accept a call
+from Pascal.)
+
+On tops-10, the argument to FORINIT and the whole function FORFIX
+can be omitted.
+
+Also on Tops-10, we call FORINIT automatically during openning the
+first Pascal file, because we now get the channel number from the
+fortran runtimes.
+
+When Fortran is made native mode, I am guessing that you will need
+to get rid of some of all of the code under kludge.
+>
+
+	twoseg 400000
+
+	search pasunv
+ifn tops10,<search uuosym>
+ife tops10,<search monsym>
+
+kludge==1	;Fortran-20 is running compatibility
+
+	entry forini,forexi,forfix
+
+	external .jbff,.jbsa,.jbrel,.jbhrl,quit
+	external reset.,exit.,forer%
+ife tops10,<
+	external getpag,relpag
+> ;ife tops10
+ifn tops10,<
+	entry fn.chn,lo.chn
+	external alchn.,dechn.,in.use
+> ;ifn tops10
+
+;procedure forini(iobufsp)
+;  iobufsp is number of words to leave for I/O buffers for Pascal
+
+;The only interference we have to worry about between Pascal and
+;  F10 is in memory allocation.  Pascal doesn't use Tops-10
+;  channels, so that is no problem.  Here are the crucial assumptions:
+;We assume that fortran initially gobbles the space from .JBFF to
+;  .JBREL.
+;On Tops-20 we have to do a dummy core uuo to allocate all of memory, in
+;  order to keep the emulator from killing us when we create pages in the
+;  heap and stack.
+
+ife tops10,<
+;Get space for a fixed-size Fortran work space.
+;compute arguments
+forini:	subi b,1		;round up to a page
+	tro b,777
+	addi b,1
+	push p,b		;save amount of space
+	lsh b,-11		;b _ number of pages for Fortran
+;get the space
+	push p,c		;get us two places on the stack
+	push p,d		;  for returning values
+    ;stack: space in wrds, pag no., addr
+	movei c,-1(p)		;where to put page number returned
+	movei d,(p)		;where to put address returned
+	pushj p,getpag		;now allocate a block for Fortran
+;pass it to Fortran as .jbff and .jbrel
+	move t,.jbff		;exchange .jbff and 0(p)
+	exch t,(p)		;
+	movem t,.jbff		;.jbff _ start of block
+    ;stack: space in wrds, pag no., pascal .jbff
+	add t,-2(p)
+	subi t,1
+	movem t,.jbrel		;.jbrel _ end of block
+	movem t,ftnrel
+> ;ife tops10
+
+ifn tops10,<
+forini:	aose in.use		;prevent reentry
+	popj p,
+forin:
+> ;ifn tops10
+
+;if first time through, save initial FORER%, since we change it in exit code
+;if not first, restore FORER% to saved value
+;this code is more complex on Tops-10, since we have to write enable the
+;high-segment, since the code is there.
+ifn tops10,<
+	hrroi a,.gtsgn		;see if high segment is sharable
+	gettab a,
+	 jrst noshar		;monitor is so old, probably doesn't share
+	tlne a,(sn%shr)		;shared?
+	jrst shared		;yes - trouble
+noshar:	movei t,0		;enable writing
+	setuwp t,		;enables, saving old setting in t
+	 jrst shared		;we must be able to change it eventually
+> ;ifn tops10
+	skipn a,olderr		;get saved value of FORER%, if any
+	skipa a,forer%		;else it is first time - use initial FORER%
+	movem a,forer%		;not first time - restore FORER% to initial
+	movem a,olderr		;and save for next time
+ifn tops10,<
+	setuwp t,		;now put back old setting
+	 jfcl			;less critical
+> ;ifn tops10
+
+
+;.jbff - .jbrel is now block for fortran
+;now we are ready to call fortran init
+	movem n,acsavn		;save global AC's
+	movem o,acsavo
+	movem p,acsavp
+	jsp o,reset.+1
+	0
+	move p,acsavp		;restore global AC's
+	move o,acsavo
+	move n,acsavn
+
+ife tops10,<
+;Return .jbff to its pascal state and check for illicit memory expansion
+	pop p,.jbff		;restore pascal's .JBFF
+	pop p,(p)		;clean up stack
+	pop p,(p)
+	move t,.jbrel		;see if fortran had to get more space
+	came t,ftnrel
+	pushj p,forcer		;if so, error
+;now we allocate all of memory, to turn off NXM trap
+forfix:	
+ifn kludge,<
+	push p,.jbhrl		;and this to make restartable
+	move a,[xwd 677777,377777] ;allocate all of memory
+	calli a,11		;for the emulator
+	 0
+	pop p,.jbhrl
+	move t,ftnrel
+	movem t,.jbrel
+> ;ifn kludge
+	popj p,
+
+
+forcer:	hrroi a,[asciz /
+% Fortran seems to have run out of space during this program
+/]
+	psout
+	popj p,
+
+
+> ;ife tops10
+
+ifn tops10,<
+forfix:	popj p,
+> ;ifn tops10
+
+	reloc 0
+
+olderr:	block 1
+acsavn:	block 1
+acsavo:	block 1
+acsavp:	block 1
+ftnrel:	block 1
+acsav:	block 20
+
+	reloc
+
+
+;procedure forexi
+;  close all fortran files 
+forexi:	
+ife tops10,<
+;See if fortran needed more space than we gave it
+	move t,.jbrel		;see if fortran has run out of space
+	came t,ftnrel		;same as we left it?
+	pushj p,forcer		;no - core error in fortran
+> ;ife tops10
+ifn tops10,<
+;Allow us to change the high seg, since forer% is probably there
+	movei t,0		;enable
+	setuwp t,		;and save old setting
+	 jrst shared		;something is wrong
+	push p,t		;save old setting
+> ;ifn tops10
+	movem p,acsavp
+	movem o,acsavo
+	movem n,acsavn
+	move t,[jrst forex1]
+	movem t,forer%		;cause exit. to return here after closing files
+	hrrzi o,.+3
+	pushj p,exit.
+	0
+	0
+forex1:	move p,acsavp
+	move o,acsavo
+	move n,acsavn
+ifn tops10,<
+	pop p,t			;put back old setting of write prot
+	setuwp t,
+	 jfcl			;not critical
+>;ifn tops10
+ife tops10,<
+ifn kludge,<
+	movei a,.fhslf		;clear compatibility mode, or somebody will
+	movei b,0		;garbage .jbrel and .jbhrl
+	scvec
+> ;ifn kludge
+> ;ife tops10
+	popj p,
+
+ifn tops10,<
+
+;special find channel routine, calls fortran's
+fn.chn:	pushj p,startf		;start up fortran if needed
+	push p,o		;save o
+	movei o,fnarg		;say give me any channel
+	pushj p,alchn.		;allocate channel
+	move a,t		;pascal wants result in a
+	pop p,o
+	popj p,
+
+	xwd 0,-1
+fnarg:	xwd 0,.+1
+	z
+
+;special lose channel routine, calls fortran's
+lo.chn:	pushj p,startf		;start up fortran if needed
+	push p,o		;save o
+	push p,fnarg-1		;one arg
+	push p,.+1		;this is a dummy
+	push p,ac1		;ac1 is the value
+	hrrzm p,-1(p)		;and put the location in the dummy slot
+	pushj p,dechn.		;deallocate channel
+	sub p,[xwd 3,3]
+	pop p,o
+	popj p,
+
+;routine to call forini implicitly if pascal open is done before the
+;first explicit call.
+startf:	aose in.use		;in.use is -1 if not yet initialized
+	popj p,
+	movem 0,acsav		;save ac's
+	move 0,[xwd 1,acsav+1]
+	blt 0,acsav+17
+	pushj p,forin		;call real workhorse
+	move 0,[xwd acsav+1,1]	;restore ac's
+	blt 0,17
+	movem 0,acsav
+	popj p,
+
+;error in case we can't set write enable
+shared:	outstr [asciz /
+? Can't write enable high segment.  Probably program is sharable.  If
+  so, GET it and then SAVE it.
+/]
+	exit
+
+> ;ifn tops10	
+
+	end
+
+

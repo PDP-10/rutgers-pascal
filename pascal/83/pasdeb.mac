@@ -1,0 +1,38 @@
+	title PASDEB - module to initialize PASDDT from DDT
+
+	twoseg
+
+	.text \sys:pasddt/debug\
+
+	t1=1
+	t2=2
+	t3=3
+
+loc 74
+exp pasdeb
+reloc
+
+;This module is obviously absurd.  It assumes that DDT is loaded, so
+;.JBDDT points to it.  In order to get a PASCAL main program to
+;start up PASDDT, .JBDDT must instead be pointing to DDTDB.  Since
+;we don't want to change .JBDDT, instead we change the location
+;the main program looks at.  We change it to look at a location
+;in this program that does indeed contain DDTDB.
+
+pasdeb::hrrz t1,.jbsa##		;look for place where startup looks at .jbddt
+	hrli t1,-200		;assume within 200 of start
+	hrrz t2,(t1)		;get address field
+	caie t2,74		;is it .jbddt?
+	aobjn t1,.-2		;no - try again
+	caie t2,74		;did we find it?
+	jrst notpas		;no -must not be PASCAL
+	movei t2,[xwd 0,ddtdb.##]	;our pseudo-.jbddt
+	hrrm t2,(t1)		;replace ref to .jbddt with addr of this
+	jrst 770000		;and return to ddt
+
+notpas:	outstr [asciz /
+?	Doesn't seem to be a PASCAL main program
+/]
+	jrst 770000
+
+	end

@@ -1,0 +1,923 @@
+	title PASNUM - write and read support for pascal-20
+
+;;;;;;;;;;;
+; Currently overflow handling is somewhat inelegant.  It used to be that
+; the overflow trap simply ignored all overflows in this module.  On Tops-20
+; we are now using the Fortran convention, wherein any overflow that is
+; followed by a JFCL is considered OK, but the result is cleared to 0.
+; Thus we have tried to put a JOV after any instruction that could overflow,
+; In addition we do JOV at the beginning of each routine to clear the
+; overflow, and at the end to detect any that somehow got by us.  (This
+; is only useful on Tops-10, since on Tops-20 if we forgot a JOV where the
+; error actually occured, the runtimes would have bombed us.)
+;;;;;;;;;;;
+
+;edit history - begins at edit 2
+
+;2 - add break character set to string input, don't gobble extra input chars
+;3 - use same algorithm to read real numbers as used by compiler, to
+;	guarantee number read tests equal to one compiled.
+;4 - prevent arithmetic errors in this module
+;5 - fix bug in readps (sometimes cleared too many character)
+;6 - modify break set for new SET OF CHAR in compiler edit 106
+;7 - make readr treat .25 as .25, not .24999999999999
+;10 - don't assume that putch saves AC0
+;11 - KA retrofit
+;12 - add overflow test routine; improved real input; fix output of -0
+;13 - changed readi,readr,readc the .readi,.readr,.readc, returns value
+;	in C instead of to address in C
+;14 - added record I/O
+
+	subttl junk to simulate tops-10 I/O routines
+
+	twoseg
+
+	search pasunv,monsym,macsym
+
+	ac0==0
+	ac1==1
+	reg==2
+	reg1==3
+	reg2==4
+	reg3==5
+	reg4==6
+	reg5==7
+	reg6==10
+
+	
+	internal safbeg,safend
+	ENTRY WRTOCT
+	ENTRY WRTINT
+	ENTRY WRTREA
+	ENTRY WRITEC
+	ENTRY WRTPST
+	ENTRY WRTUST
+	ENTRY WRTBOL
+	ENTRY WRTHEX
+	ENTRY .READC
+	ENTRY .READI
+	ENTRY .READR
+	ENTRY READPS,READUS,REDPS.,REDUS.
+	ENTRY OVERFL		;[11]
+	entry .readd,.wrrec,.wrsca
+
+ife tops10,<ifn klcpu,<extern sn.cod>>
+
+define xblt(ac,foo),<extend ac,[020B8]>
+
+	reloc 400000
+
+safbeg:				;[4] everything from here to end is "safe"
+
+;[11] overflow, returns T if overflow has happened, F otherwise
+overfl:	movei 1,1		;[11] assume overflow
+	movem 1,1(p)		;[11]
+	jov .+2			;[11] see if there was
+	setzm 1(p)		;[11] no
+	popj p,			;[11]
+
+;putch, output the character in t.  Calls the device-dependent PUT
+;  routine directly, exactly the way PUT would.  Assumes the PUT
+;  routine and everything it calls preserves AC's 2 and up.  This
+;  restriction is documented in PASIO.
+
+putch:	movem t,filcmp(b)
+	jrst @filput(b)
+
+	subttl routines for WRITE and WRITELN output
+;HILFSROUTINEN FUER AUSGABE
+
+WRTBLK: JUMPLE REG2, .+4		;WRITES BLANKES OUT
+	MOVEI AC0," "
+	PUSHJ P,PUTCH
+	SOJG  REG2, .-2 		;[10]COUNT EQUAL ZERO?
+	POPJ  P,			;YES - RETURN
+
+WRTOPN: MOVE  REG5,REG2			;SAVES FORMAT BECAUSE REG2 IS USED FOR
+					;IDIVI-INSTRUCTION
+	SETZ  REG4,			;RH - COUNT OF DIGITS ON PUSH-LIST
+					;LH - EQ 400000 IF SIGN = '-'
+	JUMPGE REG1,.+4 		;NEGATIV NUMBER?
+	TLO    REG4,400000		;YES - SET SIGN MARKER
+	SUBI   REG5,1			;ONE PLACE IN FORMAT USE FOR SIGN
+	MOVM   REG1,REG1
+	JUMPL  REG1,TOOSML		;NO DECIMAL INTEGER OUTPUT
+					;FOR 400 000 000 000B  - ONLY OCTAL OUTPUT !
+	POPJ   P,
+
+WRTSGN: TLZN  REG4,400000		;SIGN EQUAL '-'?
+	POPJ  P,			;NO - RETURN
+	MOVEI AC0,"-"			;YES
+	JRST  PUTCH			;PUTCH RETURNS OVER PUT
+
+TOOSML: MOVEI AC0, "*"			;FORMAT IS TOO SMALL
+	PUSHJ  P,PUTCH
+	SOJG   REG5, .-2		;[10]
+	POP    P,(P)			;[11] abort caller
+	POPJ   P,			;RETURNS OUT OF WRITE-ROUTINE
+
+WRTOCT: JUMPLE REG2,OCTRET		;FIELDWIDTH = 0 ?
+WRTOIN: CAIG   REG2, 14 		;LEADING BLANKS REQUIRED ?
+	JRST	      OCTEST		;NO
+	MOVEI	  AC0," "
+	PUSHJ	 P,PUTCH
+	SOJA   REG2,WRTOIN		;MORE BLANKS TO BE INSERTED ?
+
+OCTEST: MOVE   REG3,[POINT 3,REG1]
+	HRREI	  AC1,-14(REG2)
+	JUMPE	  AC1,OCTWRT		;LESS THAN 12 POSITIONS REQUIRED ?
+	IBP	      REG3		;YES
+	AOJL	  AC1, .-1
+OCTWRT: ILDB	  AC0,REG3		;GET DIGIT
+	ADDI	  AC0,"0"		;CONVERT TO ASCII
+	PUSHJ	 P,PUTCH
+	SOJG   REG2,OCTWRT		;MORE DIGITS TO BE OUTPUT ?
+OCTRET: POPJ	 P,			;NO - RETURN
+
+WRTINT:	PUSHJ  P,WRTOPN
+	IDIVI  REG1,^d10 		;GETS LOWEST DIGIT TO REG2
+	PUSH   P, REG2		;AND SAVES IT IN PUSH-LIST
+	AOS	REG4		;count digits on stack
+	JUMPG	REG1,.-3
+	CAIGE  REG5,(REG4)		;FORMAT LARGE ENOUGH ?
+	 MOVEI  REG5,(REG4)		;NO - MAKE IT BE
+	SUBI   REG5,(REG4)		;GETS NUMBER OF LEADING BLANKS
+	MOVEI  REG2,(REG5)		;WRITEBLANK-ROUTINE WORKS ON REG2
+	PUSHJ  P,WRTBLK		;WRITES BLANKS IF ANY
+	PUSHJ  P,WRTSGN		;WRITES SIGN : " " IF POSITIV,"-" IF NEGATIV
+	POP    P,AC0 		;GETS DIGIT IN PUSH-LIST
+	ADDI   AC0, "0" 		;CONVERTS TO ASCII
+	PUSHJ  P, PUTCH		;WRITES THEM OUT
+	SOJG   REG4, .-3		;MORE DIGITS ?
+INTRET: POPJ   P,			;NO - RETURN
+
+WRTHEX: JUMPLE REG2,HEXRET		;FIELD = 0?
+WRTHIN:	CAIG	REG2,9			;LEADING BLANKS REQUIRED?
+	 JRST   HEXTST			;NO
+	MOVEI	AC0 ,  " "
+	PUSHJ	P,PUTCH
+	SOJA	REG2,WRTHIN
+
+HEXTST:	MOVE	REG3,[POINT 4,REG1]
+	HRREI	 AC1,-9(REG2)
+	JUMPE	 AC1,HEXWRT		;LESS THAN 9 POSITIONS
+	  IBP	       REG3		;YES
+	 AOJL	 AC1,.-1
+
+HEXWRT:	ILDB	 AC0,REG3
+	ADDI	 AC0,"0"
+	CAIL	 AC0, 72		;DIGIT?
+	 ADDI	 AC0,  7		;NO LETTER
+	PUSHJ	P,PUTCH
+	SOJG	REG2,HEXWRT
+HEXRET:	POPJ	P,
+
+WRTMAT:	SOJL   REG5,.+4			;MORE LEADING ZERO'S REQUEST
+	MOVEI  AC0,"0"			;YES - WRITE THEM OUT
+	PUSHJ  P,PUTCH
+	SOJG   REG4,.-3 		;MORE LEADING ZERO'S BEFORE POINT ?
+	JUMPLE REG4,MATEND		;NO - MORE DIGITS BEFORE POINT ?
+WRTM1:	JUMPE  REG1,WRTM2 		;MANTISSE EQUAL ZERO ?
+	LDB    AC0,[POINT 9,REG1,8]	;NO - GET NEXT DIGIT
+	HLRE   AC1,REG3			;GET NO. OF SIGN. DIGITS
+	CAIG   AC1,0			;ANY LEFT?
+	SETZ   AC0,			;NO - USE 0
+	SUBI   AC1,1			;1 FEWER DIGITS
+	HRLM   AC1,REG3
+	TLZ    REG1,777000		;RESETZ THIS BITS
+	IMULI  REG1,^d10
+	ADDI   AC0,"0"			;CONVERTS THEM TO ASCII
+	PUSHJ  P,PUTCH
+	SOJG   REG4,WRTM1 		;MORE DIGITS BEFORE POINT FROM REG1 ?
+WRTM2:	JUMPLE	REG4,MATEND		;NO - MORE DIGITS NEEDED BEFORE POINT ?
+	MOVEI  AC0,"0"			;     YES - WRITES ONE ZERO OUT
+	PUSHJ  P,PUTCH
+	SOJG   REG4,.-2			;[10]
+MATEND: POPJ   P,
+
+wrtrea:	caige reg2,1			;width at least 1 (for sign)
+	movei reg2,1			;no - make it be
+	caige reg3,0			;at least 0 digits (or magic)
+	movei reg3,0			;no - make it be
+	jov .+1				;clear previous overflow
+	fsc reg1,0			;normalize it
+	jov [setz reg1,			;if underflow, it is zero.  I think
+	     jrst .+1]			; overflow is not possible
+	PUSHJ  P,WRTOPN		;SETS SIGN BIT AND PUTS FIELDWIDTH TO REG5
+	SETZ   REG6,			;TO SAVE DECIMAL EXPONENT
+	JUMPN  REG1,.+3 		;VALUE EQUAL ZERO ?
+	MOVEI  AC0,555555		;YES - REMEMBER IT IN AC0
+	JRST	WRTFF			;      AND WRITE IT OUT
+	CAML   REG1, [10.0]		;REAL VALEU SHOULD BE LESS THEN 10.0
+	JRST	TOOBIG			;   AND GREATER OR EQUAL THEN 1.0
+	CAML   REG1, [1.0]
+	JRST	NOWCOR			;NOW CORRECTLY POSITIONED
+	FMPR   REG1, [10.0]		;IT'S TOO SMALL
+	SOJA   REG6,.-3 		;EXPONENT BECOMES NEGATIV - CHECK AGAIN
+TOOBIG: FDVR  REG1,[10.0]		;REAL VALUE IS TOO LARGE
+	AOJ   REG6,			;EXPONENT BECOMES POSITIV
+	CAML  REG1,[10.0]		;STILL TOO LARGE?
+	JRST	TOOBIG			;YES
+NOWCOR: LDB   REG2,[POINT 8,REG1,8]	;GETS BINARY EXPONENT
+	SUBI  REG2,200
+	TLZ   REG1,377000		;CLEARS EXPONENT
+	LSH   REG1,(REG2)		;SHIFTS MANTISSE BY BINARY EXPONENT LEFT
+WRTFF:	CAIN   REG3,123456		;FIXEDREAL OR FLOATING REAL ?
+	JRST	WRTFLO			;FLOATING REAL
+	MOVEI  REG2,(REG5)		;FIXED REAL - GET FORMAT
+	SUBI   REG2,(REG3)		;REG3 CONTAINS NR OF DIGITS AFTER POINT
+	MOVEI  AC1,1(REG3)
+	ADD    AC1,REG6			;AC1 _ NO. OF SIGN. DIGITS
+	PUSHJ  P,WRTRND			;ROUND
+	JUMPL	REG6,WRTNGX		;EXPONENT NEGATIV ?
+	HRRI	REG4,1(REG6)		;NOW REG4 CONTAINS NR OF DIGITS BEFOR POINT
+	CAIGE  REG2,2(REG4)		;FORMAT LARGE ENOUGH ?
+	MOVEI   REG2,2(REG4)		;NO - MAKE IT BE
+	CAIE   AC0,555555		;VALUE EQUAL ZERO ?
+	SETZ   REG5,			;NO - NO LEADING ZERO'S
+	JRST   WRTALX
+WRTNGX:	CAIGE	REG2,3
+	MOVEI	REG2,3
+	HRRI	REG4,1			;ONE ZERO BEFORE POINT
+	MOVM   REG5,REG6		;NUMBER OF LEADING ZEROS'S
+WRTALX:	MOVEI	REG6,765432		;TO REMEMBER THAT NO EXPONENT SHALL
+					;BE GIVEN OUT
+	SUBI	REG2,1(REG4)		;FOR POINT AND DIGITS BEFORE POINT
+	JRST	WRTOUT
+WRTFLO: HRRI	REG4,1			;ONE DIGIT BEFORE POINT
+	MOVEI  REG2,1			;AT LEAST ONE LEADING BLANK
+	SKIPL  REG4			;AND IF NON-NEGATIVE,
+	MOVEI  REG2,2			; TWO
+	SUBI   REG5,(REG2)		;AND SAVE SPACE FOR IT
+	CAIGE  REG5, 7			;FORMAT BIG ENOUGH ?
+	MOVEI   REG5,7			;NO - MAKE IT BE
+	MOVEI  REG3,-6(REG5)		;DIGITS BEHIND POINT
+	CAIG   REG3,6			;MORE DIGITS THAN ACCURACY?
+	JRST   .+4			;NO - LEAVE ALONE
+	SUBI   REG3,6			;YES - HOW MANY EXTRA?
+	ADD    REG2,REG3		;MAKE LEADING BLANKS
+	MOVEI  REG3,6			;AND USE ONLY 6
+	MOVEI  AC1,1(REG3)		;SIGNIF. DIGITS
+	PUSHJ  P,WRTRND			;ROUND
+	CAIE   AC0,555555		;VALUE EQUAL ZERO ?
+	SETZ   REG5,			;NO - NO LEADING ZERO'S IN FLOATING FORMAT
+					;<REG1>: VALUE OF MANTISSE
+					;<REG2>: NR OF LEADING BLANKS
+					;<REG3>: NR OF DIGITS BEHIND POINT
+					;  LH = no. of signif. digits
+					;<REG4>: NR OF DIGITS BEFORE POINT
+					;<REG5>: NR OF LEADING ZERO'S
+					;<REG6>: DECIMAL EXPONENT
+WRTOUT:	HRLM   AC1,REG3		;SAVE NO. OF SIGN. DIGITS
+	PUSHJ  P,WRTBLK		;WRITES LEADING BLANKS
+	PUSHJ  P,WRTSGN		;WRITES SIGN
+	PUSHJ  P,WRTMAT		;WRITES MANTISSE BEFORE POINT
+	MOVEI  AC0,"."			;WRITES DECIMAL POINT OUT
+	PUSHJ  P,PUTCH
+	MOVEI  REG4,(REG3)
+	PUSHJ  P,WRTMAT		;WRITES MANTISSE BEHIND POINT
+	CAIN   REG6,765432		;WRITE EXPONENT OR NOT ?
+	JRST	REARET			;NO
+	MOVEI	AC0,"E" 		;YES - WRITE E OUT
+	PUSHJ	P,PUTCH
+	MOVEI	AC0,"+" 		;WRITES SIGN OUT
+	SKIPGE	REG6			;EXPONENT POSITIV
+	MOVEI	AC0,"-" 		;NO - WRITE MINUS SIGN
+	PUSHJ	P,PUTCH		;WRITES OUT SIGN
+	MOVM	REG1,REG6		;DEZIMAL EXPONENT TO REG1 - FOR WRITEINTEGER
+	MOVEI	AC0,"0" 		;TO WRITE ONE ZERO IF EXPONENT LESS THAN 12
+	CAIGE	REG1,12 		;EXPONENT GREATER 12
+	PUSHJ	P,PUTCH		;NO - WRITE ONE ZERO OUT
+	MOVEI	REG2,2			;FORMAT - TWO DIGITS NORMALLY
+	CAIGE  REG1,12			;NEED MORE THAN ONE DIGIT ?
+	MOVEI  REG2,1			;NO - FORMAT ONLY ONE DIGIT
+	PUSHJ  P,WRTINT		;WRITES DECIMAL EXPONENT OUT
+REARET: POPJ   P,			;RETURN
+
+wrtrnd:	caile ac1,7		;too many sign. digits?
+	movei ac1,7		;yes - use 7
+	cail ac1,0		;any significance?
+	add reg1,[005000000000	;now round there
+		     400000000
+		      31463147
+		       2436561
+		        203045
+		         15067
+		          1240
+		           104
+		             7](ac1) ;the 6 is extra now (for 8 digits)
+	caml reg1,[012000000000];overflow?
+	jrst [	push p,reg2	;yes - renormalize
+		idivi reg1,12
+		pop p,reg2
+		aoj reg6,
+		aoj ac1,	;one more sign. digit there
+		jrst .+1]
+	popj p,
+
+WRITEC:	SOJLE   REG2, .+4		;LEADING BLANKS REQUESTED ?
+	MOVEI	  AC0," "		;YES
+	PUSHJ	 P,PUTCH
+	SOJG   REG2, .-2		;[10]MORE LEADING BLANKS ?
+	MOVE   AC0, REG1		;CHARACTER TO BE OUTPUT MUST BE IN AC0
+	PUSHJ	 P,PUTCH
+WRITRT: POPJ	 P,
+
+WRTPST:	SKIPA	REG4,[POINT 7,(REG1)]	;WRITE PACKED STRING
+WRTUST: MOVX	REG4,<POINT 36,(REG1)>	;WRITE NOTPACKED STRING
+	JUMPLE REG2,WRTRET		;FIELDWIDTH = 0 ?
+WRTEST: CAIG   REG2,(REG3)		;LEADING BLANKS REQUESTED ?
+	JRST	      STROUT		;NO
+	MOVEI	  AC0," "
+	PUSHJ	 P,PUTCH
+	SOJA   REG2,WRTEST		;MORE LEADING BLANKS ?
+STROUT: ILDB	  AC0,REG4
+	PUSHJ	 P,PUTCH
+	SOJG   REG2,STROUT		;ANY CHARACTER LEFT ?
+WRTRET: POPJ	 P,			;NO - RETURN
+
+;[14] begin
+;read record - addr of place to put it is in C, FCB in B
+
+ifn tops10,<  ;code is system-dependent because FILCNT is different
+.readd:	skipl a,filcnt(b)	;a _ aobjn word for source
+	 jrst readd2		;count = 0 or non-binary file - no-op
+readd1:	move t,(a)		;copy loop
+	movem t,(c)
+	aoj c,
+	aobjn a,readd1
+readd2:	hlre c,filcnt(b)	;now get count for the GET
+	movn c,c		;make positive
+	push p,b
+	call @filget(b)		;get next item
+	pop p,b
+	ret
+> ;ifn tops10
+
+ife tops10,<  ;code is system-dependent because FILCNT is different
+.readd:	movn d,filcnt(b)	;d _ positive count
+	jumple d,readd4		;0 or non-binary file - no-op
+ifn klcpu,<
+	skipn sn.cod		;non-zero section?
+	jrst readd3		;section 0 version, use BLT
+	xmovei e,filcmp(b)	;e _ source address
+	move f,c		;f _ destination address
+	xblt d, 
+	movn c,filcnt(b)	;now get positive count for the GET
+	push p,b
+	call @filget(b)		;get next item
+	pop p,b
+	ret
+> ;ifn klcpu
+readd3:	add d,c			;d - word beyond transfer
+	hrli c,filcmp(b)	;source - destination already in C
+	blt c,-1(d)		;do the transfer
+readd4:	movn c,filcnt(b)	;now get positive count for the GET
+	push p,b
+	call @filget(b)
+	pop p,b
+	ret
+
+> ;ife tops10
+
+
+;[14] end
+
+	subttl routines for READ and READLN input
+;reg1=array ptr. make byte ptr
+;reg2=count of destination
+;reg3=place to put count of source
+
+;old versions - pass actual break set in reg4/5 - use old set convention
+
+readps:	skipa reg6,[point 7,(reg6)] 
+readus:	movx reg6,<point 36,(reg6)>
+	exch reg6,reg1
+	skipe fileof(reg)	;stop reading after error
+	 jrst reader		;return zero count
+	skipn reg4		;[2] if break set specified
+	skipe reg5		;[2] either word
+	tlo reg3,400000		;[2] reg3 bit 0 set as flag that break set
+	push p,reg4		;[2] -1(p)=1st word of break set
+	push p,reg5		;[2]   (p)=2nd word of break set
+	movei reg4,0		;reg4=count of source
+read1:	skipe fileol(reg)	;stop if source done
+	 jrst readsl		; i.e. end of line
+	move reg5,filcmp(reg)	;get current character
+	jumpge reg3,nobr	;[2] skip tests if no break set
+	movsi ac0,400000	;[2] see if in break set
+	setz ac1,		;[2]
+	movn reg5,.stchm##(reg5);[6] turn char into index into set
+	lshc ac0,(reg5)		;[2] now have bit in set
+	tdnn ac0,-1(p)		;[2] if on, done
+	tdne ac1,(p)		;[2]
+	jrst readsl		;[2]
+	move reg5,filcmp(reg)	;[2] get back current character
+nobr:	sojl reg2,readse	;[2] stop if destination full
+	addi reg4,1		;count destin char's
+	pushj P,@filget(reg)	;and advance
+	idpb reg5,reg1		;put in destin
+	jrst read1		;try again
+
+readse:	addi reg4,1		;[2] destination full - set to beyond end
+	jrst reads2		;[2] done
+
+readsl:	sojl reg2,reads2	;[5] ran out of source - see if room
+	movei reg5," "		;fill destin with blanks
+	idpb reg5,reg1		
+	jrst readsl		;[5]
+
+reads2:	trne reg3,777777	;[2] done, see if store count
+	movem reg4,(reg3)	;yes
+	adjstk p,-2		;[2] break set is on stack
+	popj P,		
+
+reader:	setzm (reg3)		;error at beginning - use zero count
+	popj p,
+
+;;;;;new versions - pass addr of break set in REG4
+
+;reg1=array ptr. make byte ptr
+;reg2=count of destination
+;reg3=place to put count of source
+;reg4=addr of break set or 0
+
+redps.:	skipa reg6,[point 7,(reg6)] 
+redus.:	movx reg6,<point 36,(reg6)>
+	exch reg6,reg1
+	skipe fileof(reg)	;stop reading after error
+	 jrst reder		;return zero count
+	push p,reg4		;[2] (p) - addr of break set
+	movei reg4,0		;reg4=count of source
+red1:	skipe fileol(reg)	;stop if source done
+	 jrst redsl		; i.e. end of line
+	move reg5,filcmp(reg)	;get current character
+	skipn (p)		;skip tests if no break set
+	jrst rednob		;none
+	move ac1,reg5		;compute addr of break word
+	lsh ac1,-5		;char div 32
+	add ac1,(p)		;now address
+	move ac1,(ac1)		;now break word
+	andi reg5,37		;char mod 32
+	lsh ac1,(reg5)		;left justify bit to test
+	jumpl ac1,redsl		;if on, done
+	move reg5,filcmp(reg)	;[2] get back current character
+rednob:	sojl reg2,redse		;[2] stop if destination full
+	addi reg4,1		;count destin char's
+	pushj P,@filget(reg)	;and advance
+	idpb reg5,reg1		;put in destin
+	jrst red1		;try again
+
+redse:	addi reg4,1		;[2] destination full - set to beyond end
+	jrst reds2		;[2] done
+
+redsl:	sojl reg2,reds2		;[5] ran out of source - see if room
+	movei reg5," "		;fill destin with blanks
+	idpb reg5,reg1		
+	jrst redsl		;[5]
+
+reds2:	trne reg3,777777	;[2] done, see if store count
+	movem reg4,(reg3)	;yes
+	adjstk p,-1		;[2] break set is on stack
+	popj P,		
+
+reder:	setzm (reg3)		;error at beginning - use zero count
+	popj p,
+
+;AUSSCHREIBEN BOOLE'SCHER GROESSEN
+
+WRTBOL:	SKIPE  REG1			;NORMALIZE TRUE
+	MOVNI  REG1,1			;TO -1.
+	CAIGE  REG2,5(REG1)		;ENOUGHT SPACE?
+	 MOVEI REG2,5(REG1)		;NO - MAKE THERE BE
+	SUBI   REG2,5(REG1)		;HOW MUCH EXTRA SPACE?
+	PUSHJ  P, WRTBLK		;WRITES LEADING BLANKS IF ANY
+	MOVEI  REG2,5(REG1)		;CHARACTERS IN OUTPUT
+	MOVE   REG3,[POINT 7,BOLWRD(REG1)]
+	ILDB   AC0, REG3		;GETS CHARACTER
+	PUSHJ  P,PUTCH
+	SOJG   REG2, .-2		;MORE CHARACTERS?
+	POPJ   P,			;NO - RETURN
+
+	ASCII  /true/
+BOLWRD:	ASCII  /false/
+
+;EINGABETEILE FUER CHARACTER, INTEGER, REAL
+
+.READC:	skipe fileof(reg)		;stop if error
+	popj p,
+	MOVE REG1,FILCMP(REG)
+	PUSHJ P,@filget(reg)
+	POPJ P,
+
+gtsext:	pop p,(p)			;exit from caller
+	popj p,
+
+GTSGN:	SKIPE	FILEOF(REG)		;END-OF-FILE = TRUE
+	jrst	gtsext			;yes - exit the caller
+	PUSHJ  P,@filget(reg)		;GETS NEXT COMPONENT
+GETSGN:	skipe fileof(reg)		;stop if error
+	jrst gtsext
+	MOVE   AC0,FILCMP(REG)		;GETS FIRST COMPONENT
+	cain	ac0,11			;ignore tabs, too
+	jrst	gtsgn
+	SKIPN	FILEOL(REG)		;EOL IS NOT BLANK NOW
+	CAIN   AC0," "			;LEADING BLANKS
+	JRST	GTSGN			;YES - OVERREAD THEM
+	SETZ   REG2,			;FOR INTEGER VALUE
+	SETZ   REG3,			;FOR SIGN
+	CAIN   AC0,"+"			;FIRST COMPONENT EQUAL PLUS ?
+	JRST	.+4			;YES - GET NEXT COMPONENT
+	CAIE   AC0,"-"			;FIRST COMPONENT EQUAL MINUS ?
+	POPJ   P,			;NO - RETURN
+	MOVEI  REG3,1			;YES - SET SIGN BIT
+	SKIPN	FILEOL(REG)		;ENDOFLINE = TRUE ?
+	PUSHJ  P,@filget(reg)		;NO - GET NEXT COMPONENT
+	MOVE   AC0,FILCMP(REG)		;FOR FOLLOWING PARTS TO AC0
+	POPJ   P,
+
+;This one is called from top level
+GETINT: JFCL   10,.+1			;CLAERS  FLAGS
+GETINL:	CAIG   AC0,"9"			;COMPONENT IN DIGITS ?
+	CAIGE  AC0,"0"
+	POPJ   P,			;NO - RETURN
+	SUBI   AC0,"0"			;CONVERTS ASCII TO INTEGER
+	IMULI  REG2,12			;OLD INTEGER - may overflow
+	JOV    OVER1
+	ADD   REG2,AC0			;ADD NEW ONE
+	JOV    OVER1
+	SKIPN  FILEOL(REG)		;ENDOFLINE = TRUE ?
+	PUSHJ  P,@filget(reg)		;NO - GET NEXT COMPONENT
+	MOVE   AC0,FILCMP(REG)		;AND GETS IT FOR FOLLOWING PARTS
+	JRST   GETINL			;GET NEXT DIGIT IF ANY
+
+;This one is called from one deep
+GTINT:	CAIG   AC0,"9"			;COMPONENT IN DIGITS ?
+	CAIGE  AC0,"0"
+	POPJ   P,			;NO - RETURN
+	SUBI   AC0,"0"			;CONVERTS ASCII TO INTEGER
+	IMULI  REG2,12			;OLD INTEGER - may overflow
+	JOV    OVER2
+	ADD   REG2,AC0			;ADD NEW ONE
+	JOV    OVER2
+	SKIPN  FILEOL(REG)		;ENDOFLINE = TRUE ?
+	PUSHJ  P,@filget(reg)		;NO - GET NEXT COMPONENT
+	MOVE   AC0,FILCMP(REG)		;AND GETS IT FOR FOLLOWING PARTS
+	JRST   GTINT			;GET NEXT DIGIT IF ANY
+
+RTEST:	CAIG   AC0,"9"			;CARACTER IN DIGITS ?
+	CAIGE  AC0,"0"
+ifn tops10,<jrst badtst-1>		;error
+ife tops10,<jrst [movei ac0,flinx1
+		  jrst badtst-1]>
+	POPJ   P,			;YES - RETURN
+
+ife tops10,<
+conerr:	push p,d
+	push p,c
+	push p,b
+	move d,b
+	pushj p,erp..##		;non-fatal error printer
+	move b,(p)
+	pcall f%shln		;show line with ^ under it
+	move t,-3(p)		;t _ PC to print
+	subi t,1		;ret addr - 1
+	pcall f%fxln		;get new line
+	pop p,b
+	pop p,c
+	pop p,d
+	pop p,a			;get return address
+	subi a,1		;addr of pushj to us
+	jrst (a)		;try again
+
+	pop	p,(p)
+	pop	p,(p)		;special entry to abort caller
+badtst:	movem	ac0,filerr(reg)
+	movei	ac0,4		;bit for user wants to handle format errors
+	tdnn	ac0,filflg(reg)
+> ;ife tops10
+
+ifn tops10,<
+conerr:	push p,d
+	push p,c
+	push p,b
+	pushj p,analys##	;non-fatal error printer
+	move a,filr99(b)
+	pushj p,@filshl(a)	;show where error is
+	move t,-3(p)		;t _ PC to print
+	subi t,1		;ret addr - 1
+	move a,filr99(b)
+	pushj p,@filfxl(a)	;get new line
+	pop p,b
+	pop p,c
+	pop p,d
+	pop p,a			;get return address
+	subi a,1		;addr of pushj to us
+	jrst (a)		;try again
+
+	pop	p,(p)
+	pop	p,(p)
+badtst:	movsi	ac0,010000	;code for data errors
+	iorm	ac0,filerr(reg)	;tell him it happened
+	movei	ac0,010000	;see if enabled
+	tdnn	ac0,filerr(reg)
+> ;ifn tops10
+	jrst	conerr		; no - fatal message
+	setzb	reg2,reg1	;return 0 (reg2 for readi/n)
+	setzm	filcmp(reg)	;clear out things like ioer
+	move	ac0,filbad(reg)
+	movem	ac0,fileof(reg)
+	movem	ac0,fileol(reg)
+	POPJ	P,
+
+ITEST:	CAIG   AC0,"9"			;CARACTER IN DIGITS ?
+	CAIGE  AC0,"0"
+ifn tops10,<jrst badtst-1>		;error
+ife tops10,<jrst [movei ac0,ifixx2
+		  jrst badtst-1]>
+	POPJ   P,			;YES - RETURN
+
+;errors for overflow - call BADTST-1 or BADTST-2, setting FLINX3 of Tops20
+
+over0:
+ife tops10,<movei ac0,flinx3>
+	jrst badtst
+
+over1:	
+ife tops10,<movei ac0,flinx3>
+	jrst badtst-1
+over2:
+ife tops10,<movei ac0,flinx3>
+	jrst badtst-2
+
+.READI:	PUSHJ  P,GETSGN		;GETS SIGN IF ANY AND FIRST COMPONENT TO AC0
+	PUSHJ  P,ITEST		;TEST IF FIRST COMPONENT IN DIGITS
+	PUSHJ  P,GETINT		;GETS INTEGER TO REG2
+	SKIPE  REG3			;SIGN EQUAL MINUS ?
+	MOVN   REG2,REG2		;YES - NEGATE INTEGER
+ifn tops10,<JFCL 10,badtst>		;OVERFLOW BIT SET ?
+ife tops10,<jfcl 10,[movei ac0,ifixx3
+		     jrst badtst]>
+	MOVEM  REG2,REG1		;PUTS INTEGER IN PLACE LOADED TO REG1
+	POPJ   P,
+
+;READIN and INTEST are for the internal call within READR.  A separate
+; routine is needed because error recovery is different.
+
+INTEST:	CAIG   AC0,"9"			;CARACTER IN DIGITS ?
+	CAIGE  AC0,"0"
+ifn tops10,<jrst badtst-2>		;error
+ife tops10,<jrst [movei ac0,flinx1
+		  jrst badtst-2]>
+	POPJ   P,			;YES - RETURN
+
+
+;Note that no overflow test is done here, since one is done in READR.
+; We call GTINT instead of GETINT to avoid clearing overflow bits, since
+; this could result in our missing an overflow.
+READIN:	PUSHJ  P,GETSGN		;GETS SIGN IF ANY AND FIRST COMPONENT TO AC0
+	PUSHJ  P,INTEST		;TEST IF FIRST COMPONENT IN DIGITS
+	PUSHJ  P,GTINT		;GETS INTEGER TO REG2
+	SKIPE  REG3			;SIGN EQUAL MINUS ?
+	MOVN   REG2,REG2		;YES - NEGATE INTEGER
+	MOVEM  REG2,REG1		;PUTS INTEGER IN PLACE LOADED TO REG1
+	POPJ   P,
+
+;[12] This routine has been largely recoded to allow typing the largest
+;	and smallest possible reals, and generally reducing the frequency
+;	of complaints about exponent being too large or small.
+;	The code is compiled directly from INSYMBOL in the compiler.
+max10:	exp ^D3435973836	;{maximum number, sans last digit}
+
+.READR:	PUSHJ  P,GETSGN		;GETS SIGN IF ANY AND FIRST COMPONET TO AC0
+	setz reg6,		;scale := 0;
+	CAIN	AC0,"."			;BEGIN WITH PT?
+	JRST	PNTFST			;YES
+	PUSHJ  P,RTEST		;TEST IF FIRST COMPONENT IN DIGITS
+					;IF NOT ERROR - MESSAGE AND EXIT
+BEFLOP:	CAIG AC0,"9"		;while ch in digits do
+	CAIGE  AC0,"0"
+	jrst pntfst
+	caile reg6,0		;if scale > 0
+	aoja reg6,beflp2	;  then scale := scale + 1
+	camge reg2,max10	;else if ival < max10
+	jrst beflp1		;  then ...
+	camn reg2,max10		;else if ival = max10
+	caile ac0,"7"		;	and ch <= 7
+	aoja reg6,beflp2	;[else scale := scale + 1]
+beflp1:	SUBI AC0,"0"		;  then ival := 10*ival + ord(ch) - ord("0")
+	IMULI REG2,12
+	ADD REG2,AC0
+beflp2:	SKIPN  FILEOL(REG)		;ENDOFLINE = TRUE ?
+	PUSHJ  P,@filget(reg)		;NO - GET NEXT COMPONENT
+	MOVE   AC0,FILCMP(REG)		;AND GETS IT FOR FOLLOWING PARTS
+	JRST BEFLOP		;  {end of while}
+; note - old comment claimed we were converting to ASCII ??????
+PNTFST:	MOVE   AC0,FILCMP(REG)	;if ch = '.'
+	CAIE   AC0,"."
+	JRST   REXP		;then
+BEHPNT: SKIPE	FILEOL(REG)	;loop
+	JRST	REXP
+	PUSHJ  P,@filget(reg)	;nextch;
+	MOVE   AC0,FILCMP(REG)	;exit if not ch in digits
+	CAIG   AC0,"9"			;IN DIGITS ?
+	CAIGE  AC0,"0"
+	JRST	REXP			;NO
+	caile reg6,0		;if scale > 0
+	aoja reg6,behpt2	;  then scale := scale + 1
+	camge reg2,max10	;else if ival < max10
+	jrst behpt1		;  then ...
+	camn reg2,max10		;else if ival = max10
+	caile ac0,"7"		;	and ch <= 7
+	aoja reg6,behpt2	;[else scale := scale + 1]
+behpt1:	SUBI AC0,"0"		;  then ival := 10*ival + ord(ch) - ord("0")
+	IMULI REG2,12
+	ADD REG2,AC0
+behpt2:	soja reg6,behpnt	;scale := scale - 1 end;
+REXP:	move reg4,reg2			;REG4 is now ival
+	MOVEI REG5,(REG3)		;REG5 is now sign
+	CAIE AC0,"E"		;if ch='E' or 'e'
+	CAIN AC0,"e"
+	JRST .+2
+	jrst noexp		;then begin
+	SKIPN	FILEOL(REG)
+	PUSHJ  P,@filget(reg)	;nextch;
+	PUSHJ  P,READIN		;scale := scale + readint
+	ADD    REG6,REG2	;end;
+noexp:
+ife kacpu,< ;[11]
+	fltr reg4,reg4		;rval := ival
+>
+ifn kacpu,<
+	MOVEI	AC1,reg4		;PLACE WHERE FIXED NO. IS
+	PUSHJ	P,INTREA		;CONVERT TO FLOATING
+> ;end [11]
+;NOTE: The code from here to REAOUT is essentially hand-compiled from
+; the compiler source in INSYMBOL.  This is to be sure that numbers typed
+; in at runtime and at compile time are the same.
+	jumpe reg6,reaout		;[3] if scale # 0 then begin
+	move ac1,[10.0]			;[3] fac := 10.0;
+	movm reg2,reg6			;[7] ascale := abs(scale);
+					;[11] loop
+rexp1:	trnn reg2,1			;[7]   if odd (ascale) then
+	jrst rexp1a			;[12]
+	caile reg6,0			;[12]    if scale > 0
+	fmpr reg4,ac1			;[12]      then rval := rval*fac
+	jov over0
+	caig reg6,0			;[12]      else rval := rval/fac
+	fdvr reg4,ac1			;[12]
+	jov over0
+rexp1a:	lsh reg2,-1			;[7]   ascale := ascale div 2;
+	jumpe reg2,reaout		;[11] exit if ascale = 0;
+	fmpr ac1,ac1			;[3]   fac := sqr(fac);
+	jov over0
+	jrst rexp1			;[11] end; end
+REAOUT: jov over0
+	SKIPE  REG5			;SIGN EQUAL PLUS ?
+	MOVN   REG4,REG4		;NO - NEGATE REAL VALUE
+	MOVEM  REG4,REG1		;STARES VALUE INTO ADDRESS
+	POPJ   P,
+
+;[14] begin
+;write record - addr of place to put it is in C, FCB in B
+
+ifn tops10,<  ;system-dependent because FILCNT is different
+.wrrec:	move a,filcnt(b)	;a _ aobjn word for source
+	jumpge a,wrrec2		;count = 0 or non-binary file - no-op
+wrrec1:	move t,(c)		;copy loop
+	movem t,(a)
+	aoj c,
+	aobjn a,wrrec1
+wrrec2:	hlre c,filcnt(b)	;get count for PUT
+	movn c,c		;make positive
+	push p,b
+	call @filput(b)		;put this item out
+	pop p,b
+	ret
+> ;ifn tops10
+
+ife tops10,<
+.wrrec:	movn d,filcnt(b)	;d _ positive count
+	jumple d,wrrec4		;0 or non-binary file - no-op
+ifn klcpu,<
+	skipn sn.cod		;non-zero section?
+	jrst wrrec3		;section 0 version, use BLT
+	move e,c		;e _ source address
+	xmovei f,filcmp(b)	;f _ destination address
+	xblt d, 
+	movn c,filcnt(b)	;now get positive count for the PUT
+	push p,b
+	call @filput(b)		;put this item out
+	pop p,b
+	ret
+> ;ifn klcpu
+wrrec3:	hrl c,c			;LH: source
+	hrri c,filcmp(b)	;RH: destination
+	addi d,filcmp(b)	;d _ word beyond transfer
+	blt c,-1(d)		;do the transfer
+wrrec4:	movn c,filcnt(b)	;now get positive count for the PUT
+	push p,b
+	call @filput(b)
+	pop p,b
+	ret
+> ;ife tops10
+
+;write scalar - like write record but the thing is loaded into AC's
+
+ifn tops10,<
+.wrsca:	hlre a,filcnt(b)	;a _ neg word count
+	jumpge a,wrsca2		;count = 0 or non-binary file - no-op
+	movem c,filcmp(b)	;always one word
+	came a,[exp -1]		;if exactly one, no more to do
+	movem d,filcmp+1(b)	;maybe second word
+wrsca2:	hlre c,filcnt(b)	;get count for PUT
+	movn c,c		;make positive
+	push p,b
+	call @filput(b)		;put this item out
+	pop p,b
+	ret
+;[14] end
+> ;ifn tops10
+
+ife tops10,<
+.wrsca:	movn a,filcnt(b)	;a _ pos word count
+	jumple a,wrsca2		;count = 0 or non-binary file - no-op
+	movem c,filcmp(b)	;always one word
+	came a,[exp 1]		;if exactly one, no more to do
+	movem d,filcmp+1(b)	;maybe second word
+wrsca2:	movn c,filcnt(b)
+	push p,b
+	call @filput(b)		;put this item out
+	pop p,b
+	ret
+> ;ife tops10
+
+;[14] end
+
+ifn kacpu,<
+
+entry intrea,trunc
+
+;*** CONVERTS INTEGER TO REAL
+;<AC1> = REGISTER WHERE INTEGERVALUE STANDS
+
+intrea:	push p,ac1		;save return location
+	move ac0,(ac1)		;ac0 _ original
+	idivi ac0,400000	;magic taken from SAIL
+	skipe ac0
+	tlc ac0,254000
+	tlc ac1,233000
+	fadr ac0,ac1
+	pop p,ac1
+	movem ac0,(ac1)		;return value to same place
+	popj p,
+
+;*** STANDARDPROCEDURE TRUNC
+;      CONVERTS REAL TO INTEGER
+;	INPUT AND RESULT ARE STANDING IN REG
+;	pointed to by ac1, lh=-1 for round
+
+trunc:	move ac0,(ac1)		;ac0 _ value of number
+	jumpge ac0,nonneg
+	movn ac0,ac0
+;here for negative numbers
+	jumpge ac1,.+2		;unless truncating
+	fadri ac0,(0.5)		;round negative numbers
+	push p,ac1
+	muli ac0,400
+	tsc ac0,ac0
+	exch ac0,ac1
+	ash ac0,-243(ac1)
+	movn ac0,ac0		;make negative again
+	pop p,ac1
+	movem ac0,(ac1)
+	popj p,
+
+;here for non-negative numbers
+nonneg:	jumpge ac1,.+2		;unless truncating
+	fadri ac0,(0.5)		;round positive number
+	push p,ac1		;save location
+	muli ac0,400		;magic from SAIL
+	tsc ac0,ac0
+	exch ac0,ac1
+	ash ac0,-243(ac1)
+	pop p,ac1
+	movem ac0,(ac1)		;return value to same AC
+	popj p,
+> ;ifn kacpu
+
+;this code is here to avoid overflow problems
+ifn tops10,<
+entry .%adgb
+.%adgb:	jov .+1		;clear overflow
+	imul b,h	;shift one digit
+	jov .%adgx
+	add b,g		;add new
+	jov .%adgx
+	aos (p)		;skip is OK
+.%adgx:	popj p,
+>
+	
+
+safend:					;[4] end of "safe" area
+	END

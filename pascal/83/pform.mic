@@ -1,0 +1,2 @@
+@load pform.pas, pforms.mac
+@save pform.exe

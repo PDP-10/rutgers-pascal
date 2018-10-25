@@ -1,0 +1,1200 @@
+TITLE	PASFOR - Memory manager for PASCAL (with FOROTS version 6)
+
+oldfor==0
+
+;if you need to use this with version 5 of Fortran on Tops-20,
+;set OLDFOR to non-0, recompile, and replace the module PASFOR in
+;PASLIB, e.g.
+;  compil pasmem.mac
+;  maklib
+;  paslib=paslib/mas:pasfor,pasmem/rep:pasfor
+
+comment 
+
+There are four different kinds of memory management:
+   Fortran - using FUNCT. - NEW and DISPOS in PASFRM
+   Heap - NEW and DISPOS in HEAP
+   Dumb extended - GETNEW in PASIO - defined as NEW in NEW
+   Dumb normal - GETNEW in PASIO - defined as NEW in NEW
+
+Hear is what we want:
+  If Fortran is used:
+	In non-extended we want to use FUNCT. all the time
+	In extended, we want to ignore the fact the Fortran is used,
+		as our two managers do a better job than FUNCT.
+  If Fortran is not used:
+	If DISPOS is called, we want to use HEAP's NEW and DISPOS
+	If DISPOS is not called, we want to use one of of the dumb
+		routines.
+
+Here is how we accomplish this:
+
+heap: 	entry new,dispose
+	intern new,dispos
+
+We always have either PASFOR or PASIMN.  They both define
+	PASIM., NEW.L, and PASEX.  In the case of PASFOR these
+	involve Fortran.  In PASIMN, they are aliases to things
+	in other Pascal modules.
+
+We always have either PASFRM or PASMEM.  They both define
+	PASIX., which finishes the memory allocation started by
+	PASFOR or PASIMN.
+
+pasfor:	entry forini	;non-memory part of Fortran interface
+	extern exit.,reset.,...
+	intern pasim.
+	extern pasix.
+
+pasfrm:	entry pasix.	;memory part of Fortran interface
+	intern new,dispose,pasix.
+
+pasimn:	entry pasim.	;a dummy pasim.=pasin.
+	intern pasim.
+	extern pasix.
+
+pasmem:	entry pasix.
+	intern pasix.
+
+new:	entry new
+	intern new
+
+extended:  heap, new, pasfor, pasimn, pasmem
+normal:    pasfor, pasfrm, pasimn, pasmem, heap, new
+
+I believe this will have the desired effect.
+
+
+
+SUBTTL	Norm Samuelson <Samuelson@SANDIA>, 9/81
+
+;This module does the part of Fortran setup that is needed for both
+;extended an non-extended versions.
+
+	twoseg
+
+	search	monsym, macsym, pasunv, jobdat
+	.reques	sys:forlib
+	sall
+	.direc	sfcond
+	.direc	flblst
+
+	entry	forini, forexi
+	intern	pasim., pasex.
+
+	extern	reset., funct., exit.	 ;in FOROTS
+;;;	extern	enterc, leavec, lockc.
+	extern	pasix.
+	extern	endl, e.crit
+
+ifn klcpu,<extern  sn.cod>
+
+;functions used in FUNCT. calls to FOROTS
+f%cor==2			;get low seg memory
+f%rad==3			;ret low seg memory
+f%gpg==15			;get pages
+f%rpg==16			;ret pages
+
+	reloc	0
+
+f.fun:	block	1		;function code
+f.sts:	block	1		;status returned
+f.adr:	block	1		;address for FUNCT.
+f.siz:	block	1		;size (words) requested
+temp:	block	1
+tempo:	block	1
+oldp:	block	1		;old stack, used if a program is restarted
+oldo:	block	1
+retg:	block	1
+reth:	block	1
+
+	reloc	400000
+
+	-5,,0			;arg list for calls to FUNCT.
+getarg:	z	f.fun
+	[asciz/mem/]
+	z	f.sts
+	z	f.adr
+	z	f.siz
+
+	0			;zero args
+nularg:	0			;null arg list
+
+forexi:				;dummy just to get us loaded
+forini:	ret			;dummy just to get us loaded
+
+;call FOROTS to close all fortran files
+PASEX.:	xmovei	o,nularg
+	pushj	p,exit.
+	 jrst	endl		;should never get here anyway...
+subttl	initialize the interrupt system and the memory manager
+
+;initialize the memory management and interrupt system, use FOROTS...
+;In section 0, we have a problem with the stack: Fortran thinks it owns
+; the core image.  We try to get everything from FOROTS that we can, including
+; I/O buffers and heap.  But we can't easily get the stack from FOROTS.
+; The reason is that we need to be able to grow indefinitely, and there
+; is no way FUNCT. can handle that.  We provide two different strategies:
+; In the default we allocate from the end of the high segment to 777777, and
+; tell FOROTS that this is part of the high segment.  This keeps
+; FOROTS out of our hair, and gives us plenty of space.  However in
+; cases where space gets tight and the user wants to diddle memory
+; allocation using $S, this is not very nice.  Thus if there is any
+; sign that the user has done something odd, we leave things alone.
+; It is then up to the user to make sure that he doesn't interfere
+; with FOROTS.  This may in general require that he know the
+; allocation strategy used for FOROTS.  Of course in a non-zero section,
+; we use whole sections for the stack, so there is no problem.
+
+;note - we enter here with H containing our return address
+;	and G our caller's.  We wait until after doing RESET. to
+;	push these onto the stack, for two reasons:
+;	  - we may end up moving the stack, if this is a restart of
+;		the default case
+;	  - Fortran may clear the page of memory containing the
+;		stack.
+
+PASIM.::movem g,retg		;save returns
+	movem h,reth
+ifn klcpu,<
+	skipn	sn.cod
+	 jrst	pasim0		;section 0
+;here for section 1 version 
+; - at the moment the evidence indicates that there will be no -
+; - need for code at this point.  However we will have to wait -
+; - for version 10 to be really sure 			       -
+;we do however have to push the return addresses onto the stack
+	jrst	pasim1		;no need for stack or heap checks...
+> ;ifn klcpu
+
+;here to check out the heap and stack
+pasim0:	skipe	oldp		;first time?
+	jrst	pasima		;no - see comments at PASIMA
+;we are now committed to the current stack
+	skipe	stk.bt##	;did the user ask for a specific stack?
+	jrst	pasim1		;yes - give him lots of rope
+	hrrz	a,.jbhrl	;is there a high segment
+	jumpe	pasim1		;no - he is doing something funny, so
+				;  give him rope here, too
+;here for simple case - we lay claim to the whole high segment
+; we need two things - a new size and a new ending location.  The
+;	ending location will always be 777777.  To know the size we
+;	have to know the start.  This is not necessarily 400000, since
+;	the user can do funny things with LINK.  ROUND means TRO 777
+;	   newsize = 1000000 - start
+;	   start = oldend - oldsize
+;	   oldend = RH(.JBHRL) + 1
+;	   oldsize = round (LH(.JBHRL) - 1) + 1
+;	   newsize = 1000000 - (oldend - oldsize)
+;		   = 1000000 - (RH(.JBHRL) + 1 - round(LH(.JBHRL) - 1) - 1)
+;		   = 1000000 - RH(.JBHRL) + round (LH(.JBHRL) - 1)
+	hlrz	a,.jbhrl	;LH(.JBHRL)
+	subi	a,1		;- 1
+
+ife oldfor,<
+	ior	a,[xwd 1,777]	;round and + 1000000
+	   >
+ifn oldfor,<
+;with Fortran previous to version 6, Fortran needs the 
+;emulator. In that case, we reserve only up to 700000,
+;which is where the emulator starts.  
+	tro	a,777		;round
+	addi	a,700000	;add 700000 instead of 100000
+	   >
+
+	hrrz	b,.jbhrl	;RH(.JBHRL)
+	sub	a,b		;new size
+	hrlo	a,a		;new size,,777777
+	movem	a,.jbhrl	;new .JBHRL
+	movem	o,oldo
+	movem	p,oldp		;save stacks in case of restart
+
+;NB: we can't save anything on the stack here, because Fortran may
+;clear the page on which the stack is stored.
+pasim1:	movem	p,temp		;save our stack
+	movem	o,tempo
+	jsp	o,reset.	;init FOROTS
+	exp	0		;dummy args
+	move	p,temp		;restore stack
+	move	o,tempo		;and basis
+	push	p,retg		;now it is safe to put on our ret addr
+	push	p,reth
+	jrst	pasix.		;if extended, go ahead and init Pascal's
+				; memory management.  If not, this is a dummy,
+				; as we will use Fortran's.
+
+;Here in case this is a restart (i.e. the user has done ^C, START or some
+;equivalent).  The problem is that the Pascal initialization code sets up
+;the stack by looking at .JBHRL, but we have changed that.  Thus the
+;current P and O are wrong.  We leave .JBHRL as is, since the first time
+;through set it up the way we want it.  But we reset P and O to the
+;values computed the first time.  We have to be very careful, because
+;the stack is probably in the AC's at the moment
+
+pasima:	move	p,oldp
+	move	o,oldo
+	jrst	pasim1
+
+;new.l - We will always use Fortran for this, even in extended core images
+; allocate memory
+;	b - nwds
+; returns address of new memory in b
+	;prepare a call to FUNCT. in FOROTS to get memory...
+new.l::	call	e.crit		;critical section
+	movem	b,f.siz
+	movei	a,f%cor		;allocate some core
+	movem	a,f.fun
+	push	p,o
+	xmovei	o,getarg
+	pushj	p,funct.	;ask forots to do the work
+	pop	p,o
+	skipe	f.sts		;status ok?
+	 jrst	nofree
+	move	b,f.adr
+	ret			;end critical section
+
+nostak:	errmsg	<Error allocating stack below 640000>
+	jrst	endl
+
+noheap:	errmsg	<Error allocating heap below 400000>
+	jrst	endl
+
+nofree:	errmsg	<Request for buffer space runs into heap>
+	jrst endl
+
+	prgend
+
+TITLE PASFRM	allocate memory for use with Fortran, non-extended only
+
+;This module contains the code the is used in the non-extended version
+;when Fortran is loaded.  It is loaded in by the entry EXIT., since
+;the previous module refers to EXIT.
+
+	twoseg
+
+	search	monsym, macsym, pasunv, jobdat
+	sall
+	.direc	sfcond
+	.direc	flblst
+
+	entry	pasix.
+	intern	getpg., relpg., pasix., new, dispos, dispf.
+
+	extern  funct. ;in FOROTS
+;;;	extern	enterc, leavec, lockc.
+	extern	endl, e.crit, new.l, dispc.
+
+ifn klcpu,<extern  sn.cod>
+
+;functions used in FUNCT. calls to FOROTS
+f%cor==2			;get low seg memory
+f%rad==3			;ret low seg memory
+f%gpg==15			;get pages
+f%rpg==16			;ret pages
+
+	reloc	0
+
+f.fun:	block	1		;function code
+f.sts:	block	1		;status returned
+f.adr:	block	1		;address for FUNCT.
+f.siz:	block	1		;size (words) requested
+temp:	block	1
+
+	reloc	400000
+
+	-5,,0			;arg list for calls to FUNCT.
+getarg:	z	f.fun
+	[asciz/mem/]
+	z	f.sts
+	z	f.adr
+	z	f.siz
+
+pasix.:	ret			;no more initialization needed, since
+				;Fortran is doing all of our work.
+
+new=new.l			;use the code defined above, which
+				;calls Fortran's FUNCT.
+
+;getpg.
+;	a - count of number of pages desired
+;result in a [npgs,,page#]
+getpg.:	call	e.crit		;critical section
+	movem	a,temp
+	lsh	a,9		;convert to words
+	movem	a,f.siz
+	movei	a,f%gpg		;get pages
+	movem	a,f.fun
+	push	p,o
+	xmovei	o,getarg
+	pushj	p,funct.	;ask forots to do the work
+	pop	p,o
+	skipe	f.sts		;status ok?
+	 jrst	nofree
+	move	a,f.adr
+	lsh	a,-9		;convert to page #
+	hrl	a,temp
+	ret			;leave critical section
+
+subttl	return memory
+
+;relpg.
+;	a - npgs,,page#
+relpg.:	call	e.crit		;critical section
+	hrrzm	a,f.adr
+	hlrz	a,a
+	lsh	a,9		;convert #pages to # words
+	movem	a,f.siz
+	move	a,f.adr
+	lsh	a,9		;convert page# to address
+	movem	a,f.adr
+	movei	a,f%rpg		;ret pages
+retmem:	movem	a,f.fun
+	push	p,o
+	xmovei	o,getarg
+	pushj	p,funct.
+	pop	p,o
+	skipe	f.sts
+	 jrst	reterr
+	ret			;end critical section
+
+;dispose for records with files in them
+DISPF.:	call	dispc.
+	jrst	dispos
+
+;dispose
+; return memory
+;	b - addr
+;	c - nwds
+DISPOS:	call	e.crit		;critical section
+	movem	b,f.adr
+	movem	c,f.siz
+	movei	a,f%rad		;return memory
+	jrst	retmem		;join relpg. code above
+
+
+nofree:	errmsg	<Request for buffer space runs into heap>
+	jrst endl
+
+reterr:	errmsg	<Error in returning pages to FOROTS>
+	jrst endl
+
+	prgend
+
+
+TITLE	PASIMN - Module to call in PASMEM if Fortran not here
+;We always have either PASFOR or PASIMN
+
+	entry pasim.
+	intern pasim.,new.l,pasex.,mther.
+	extern pasix.,endl,runer.
+	search pasunv,monsym
+
+	twoseg 400000
+
+;The following code is here because we want it whenever Fortran
+;is not loaded.  This module is used in that case.  PASMEM is used
+;with Fortran in extended addressing, and we do not want this
+;present in that case.
+
+;MTHER. - routine used by math library when it wants to print
+;an error message.  This is not complete, but I haven't had time
+;to digest the whole version from FORLIB.
+
+mther.:	exch a,(p)		;t1 - addr of error block
+	move a,4(a)		;byte pointer
+	esout%			;? and message
+	move a,(p)		;get original T1
+	movem t,(p)		;save T - (P) is now free
+	move t,-1(p)		;return address
+	subi t,1		;actual error call
+	pushj p,runer.		;print PC, call DDT, etc.
+	pop p,t			;restore T
+	popj p,			;return address was one down on stack
+
+ifn klcpu,<
+	extern gnew.l
+	new.l==gnew.l		;use getnew for local allocation
+> ;ifn klcpu
+ife klcpu,<
+	extern new
+	new.l==new
+> ;ife klcpu
+
+;we enter here with return addresses in G and H, because in some
+;obscure case we are going to play games with the stack.  In this
+;case the stack is just fine, so we push G and H onto it and then
+;do our thing.
+pasim.:	push p,g
+	push p,h
+	jrst pasix.
+
+	pasex.==endl		;nothing special, just quit
+				;in PASFOR this closes fortran files...
+
+	prgend
+
+
+TITLE	PASMEM - Memory manager for PASCAL (without FOROTS)
+subttl page allocation/deallcation
+
+;This code was removed from PASIO.MAC to make it possible to use
+;the memory management routines in FOROTS.  This will be done by
+;having two routines with the same entry points and calling sequence,
+;but this one will do it all itself, while the other will let FOROTS
+;do the dirty work.
+
+	twoseg
+
+	search	monsym, macsym, pasunv, jobdat
+	sall
+	.direc	sfcond
+	.direc	flblst
+
+	entry	getpg.,relpg.,pasix., arithe, setari
+
+	extern	runer., endl, e.crit
+	extern	lstnew, safbeg, safend, cainit, in.ddt
+ifn klcpu,<extern sn.cod, lstnwl, getsc.>
+
+	reloc	0
+
+
+ln$fpg==<1000+^d35>/<^d36>
+frepag:	block ln$fpg	;array of bits to indicate free pages in buffer section
+ifn klcpu,<
+sn.buf:	block	1		;buffer section
+>;ifn klcpu
+
+xsirar:	exp	3
+	block	2
+
+;in the non-XSIR case, we use OLDPC. as levtab
+
+levtab:	oldpc.+0
+	oldpc.+2
+	oldpc.+4
+
+oldpc.:	block 6
+
+pcadr:	block 1		;OLDPC. or OLDPC.+1 - the address part of the
+			;level 1 PC.
+
+badpdl:	block 1
+chntb.:	block 6		;0 - 5
+	xwd 1,ovrint	;6
+	xwd 1,ovrint	;7
+	block 1		;[4] 8
+	xwd 1,pdltrp	;[4] 9
+	block 5		;10-14
+ife tenex,<
+	block 1		;15
+> ;ifn tenex
+ifn tenex,<
+	xwd 1,illins	;15	
+> ;ife tenex
+	block ^D26	;[4] 16-35
+
+trpblk:
+trpflg:	z		;flags
+trpadr:	z		;PC
+	z		;eff addr
+trpnpc:	exp ovrflw	;addr of trap routine [in init, add in section]
+
+trpxit:	xjrstf trpflg	;normal way of returning from trap
+
+ovrcnt:	block 1		;count of number of errors
+
+	reloc	400000
+	subttl error trapping
+
+	ovr==1b0	;any overflow
+	cry0==1b1	;carry 0
+	cry1==1b2	;carry 1
+	fov==1b3	;some floating pt. error
+	fxu==1b11	;floating underflow
+	ndv==1b12	;some division by zero
+
+
+;The new convention is that we clear the result as in Fortran.  Then
+;if it is followed by JFCL, we do nothing, else print message and 
+;possibly error depending upon APRCNT
+
+;AC usage:
+;  e - error code
+;  f - address
+;  g/h - value to return
+;  t-d - temps
+
+apracs==-20
+
+;The following routine is designed to be called by SWTRP%.  If we have to
+;use the PSI system, it simulates this.
+
+ovrflw:	skipe	in.ddt	;if in debugger
+	xct	trpxit	;nothing to do
+
+;;;;;(1) Save AC's
+
+	adjstk	p,^D19		;for safety, as we sometimes use above stack
+ifn klcpu,<
+	skipe	sn.cod		;skip if not extended addressing
+	 jrst	[dmovem 0,apracs(p)	;if extended, must be a KL
+		dmovem	2,apracs+2(p)
+		movei	0,<p-4>	;# ACs left to save
+		movei	1,4
+		xmovei	2,apracs+4(p)
+		extend	0,[xblt]
+		jrst	ovrfl1]
+>;ifn klcpu
+	movem	0,apracs(p)
+	hrli	0,1
+	hrri	0,apracs+1(p)
+	blt	0,apracs+17(p)
+
+;;;;;(2) Find what the error was, to E
+
+ovrfl1:	hlrz e,trpflg	;get flags in RH
+	andi e,(ndv!fov!fxu) ;clear all but these
+	lsh e,-5	;right-justify ndv
+	trze e,(1b8)	;fov set?
+	iori e,1b33	;move it to right end
+	jumpe e,ovrfl2	;don't change value for integer overflow
+
+;;;;;(3) Clear the result
+
+	xmovei f,apracs(p)	;F is used below
+	move a,trpadr	;full error pc
+	move a,-1(a)	;instruction interrupted
+;the place we have to clear depends upon the operation that blew up
+;so the following code uses a table with one entry for each opcode,
+;specifying a routine to use.
+	ldb b,[point 9,a,8] ;op code of one that blew
+	cail b,110	;if not 110-377
+	caile b,377
+	jrst ovrfl2	;then ignore
+	subi b,110	;get offset into dispatch table
+	adjbp b,[point 6,zertab,5] ;get pointer to routine code
+	ldb c,b		;c _ routine code
+	pushj p,@zerdis(c)	;go to routine
+	trz e,10	;some routines set this bit
+
+;;;;;(4) Now check for conditions which cause us to ignore errors
+
+ovrfl2:	
+  ;if JFCL next, ignore error, but leave on the status bits
+  ;needed to trigger his JFCL
+	move d,trpadr	;full error pc
+	hlrz b,(d)	;next instruction
+	trz b,777	;opcode only
+	cain b,(jfcl)	;or if followed by JFCL
+	jrst [  movx a,<1B9!1B10!1B11!1B12> ;bits that JFCL can check
+		andcm a,(d)		;clear the ones his JFCL will handle
+		lsh a,^D9		;shift into flag positions
+		tlo a,(fxu!ndv)		;and add in other bits we clear
+		andcam a,trpflg		;clear
+		jrst ovrflx]		;and exit
+	aos ovrcnt	;in case he wants to know about errors
+	skipn aprcnt(e)	;if user is ignoring errors
+	jrst [	movx a,<ovr!cry0!cry1!fov!fxu!ndv> ;clear error bits and exit
+		andcam a,trpflg
+		jrst ovrflx]
+;;;;;(5) Print error message
+ovrfl3:	movx a,<ovr!cry0!cry1!fov!fxu!ndv> ;clear bits so next error is right
+	andcam a,trpflg
+	sosge aprcnt(e)	;if fatal
+	jrst ovrfl4	;do it differently
+	hrroi a,[asciz /
+%/]
+	psout%		;warning if not
+	hrro a,aprtab(e) ;get right error message
+	psout%		;now the text
+	hrroi a,[asciz / at user PC /]
+	psout%
+	movei a,.priou
+	move b,trpadr
+	xmovei b,(b)	;get rid of junk bits
+	movei c,^D8
+	nout%
+	 jfcl
+	hrroi a,[asciz /
+/]
+	psout%
+	jrst ovrflx
+
+;;;;;;(6) Fatal error if he wants one
+ovrfl4:	hrro a,aprtab(e) ;get right error message
+	esout%		;real error
+	move t,trpadr	;the address part of the PC
+	pushj p,runer.	;put out pc and maybe go to ddt
+	;fall through if he continues
+
+;;;;;(7) Exit
+ovrflx:
+ifn klcpu,<
+	skipe	sn.cod		;skip if extended addressing
+	 jrst	[movei	0,<p-4>		;restore ac's
+		xmovei	1,apracs+4(p)
+		movei	2,4
+		extend	0,[xblt]
+		dmove	0,apracs(p)
+		dmove	2,apracs+2(p)
+		adjstk	p,-^D19
+		xct	trpxit]
+>;ifn klcpu
+	hrli	0,apracs+1(p)	;restore ac's
+	hrri	0,1
+	blt	0,17
+	move	0,apracs(p)
+	adjstk	p,-^D19
+	xct	trpxit
+
+;interrupt version
+
+ovrint:	adjstk p,3
+	push p,a
+	move a,@pcadr	;address part
+	movem a,trpadr
+	move a,oldpc.	;flag part
+	movem a,trpflg
+	pop p,a
+	pushj p,ovrflw	;call the trap handler
+	push p,trpflg	;in case it changed flags
+	pop p,oldpc.
+	adjstk p,-3	;and recover
+	debrk%
+
+;ARITHERR - return count
+arithe:	move a,ovrcnt
+	movem a,1(p)
+	setzm ovrcnt	;clear count
+	popj p,		;and return
+
+;SETARITH - set traps (which,code)
+setari:	jumpl b,errall	;do them all?
+	caile b,6	;make sure it is valid
+	jrst [	errmsg <Argument to SETARITH must be -1 to 6>
+		jrst endl]
+	movem c,aprcnt(b) ;and use it
+	popj p,
+
+;set them all
+errall:	move b,[xwd -7,0]
+	movem c,aprcnt(b)
+	aobjn b,.-1
+	popj p,
+
+	reloc
+
+aprcnt:	block 8		;counts how many error messages to give
+			;-1 for fatal error
+			;0 for ignore
+			;+n for N messages, then ignore
+
+	reloc
+
+maxint==377777777777
+minint==400000000000
+maxflt==377777777777
+minflt==-377777777777
+
+;values to use in case of various kinds of overflow.  The first
+;table is for nonnegative results, the second for negative
+aprval:	exp maxint		;int overflow - not used
+	exp maxint		;int divide
+	exp 0			;impossible
+	exp 0			;impossible
+	exp maxflt		;flt overflow
+	exp maxflt		;flt divide
+	exp 0			;flt underflow
+	exp 0			;impossible
+;negatives
+	exp minint		;-int overflow - not used
+	exp minint		;-int divide
+	exp 0			;impossible
+	exp 0			;impossible
+	exp minflt		;-flt overflow
+	exp minflt		;-flt divide
+	exp 0			;-flt underflow
+	exp 0			;impossible
+
+aprtab:	[asciz / Integer overflow/]
+	[asciz / Integer divide check/]
+	[0]
+	[0]
+	[asciz / Floating overflow/]
+	[asciz / Floating divide check/]
+	[asciz / Floating underflow/]
+	[0]
+
+;This is a dispatch table of routines to go to for various kinds of
+;instruction.
+zerdis:	ifiw	clrn		;noop
+	ifiw	clra		;clear one AC
+	ifiw	clra2		;clear two AC's
+	ifiw	clra4		;clear four AC's
+	ifiw	clrm		;clear memory
+	ifiw	clrm2		;clear two memory loc's
+	ifiw	clram		;clear AC and memory
+	ifiw	clra2m		;clear two AC's and memory
+
+;nothing
+clrn:	popj p,
+
+;clear one AC
+clra:	ldb b,[point 4,a,12] ;ac field
+	add b,f		;where it is stored
+	skipge (b)	;if negative
+	tro e,10	;use negative table
+	move t,aprval(e) ;get value to clear to
+	movem t,(b)	;clear ac
+	popj p,
+
+;clear AC and AC+1
+clra2:  ldb b,[point 4,a,12] ;ac
+	move c,b
+	add c,f		;relocate to where stored
+	skipge (c)	;if negative
+	tro e,10	;use negative table
+	move t,aprval(e) ;get value to clear to
+	movem t,(c)
+	addi b,1	;next ac
+	andi b,17
+	add b,f
+	movem t,(b)
+	popj p,
+
+;clear AC to AC+3, handling wraparounds
+clra4:	ldb a,[point 4,a,12] ;ac
+	move b,a
+	add b,f
+	skipge (b)	;if negative
+	tro e,10	;use negative value
+	move t,aprval(e) ;get value to clear to
+	movem t,(b)
+	movei c,3	;three more ac's
+clra4l:	addi a,1
+	move b,a
+	andi b,17
+	add b,f
+	movem t,(b)
+	sojg c,clra4l
+	popj p,
+
+;clear effective address
+clrm:	ldb b,[point 4,a,17] ;index reg
+	tlz a,777757	;now clear op code,ac, and index from instruction
+	caie b,0		;unless no index reg
+	 tlo a,c		;modify to use index c
+	tlo a,(xmovei b,)	;movei
+	add b,f		;relocate to addr of index reg used
+	move c,(b)	;and get contents of index reg
+	xct a		;do it - b now has addr of thing to be changed
+	skipge (b)	;if negative
+	tro e,10	;use negative value
+	move t,aprval(e) ;get value to clear to
+	txnn b,<777776777760> ;is it an AC?
+	jrst clrac	;if it is an ac, it is special
+	movem t,(b)	;no - just do it
+	popj p,
+
+clrac:	move c,b	;can't garbage b
+	add c,f		;relocate into user ac's
+	movem t,(c)	;clear it
+	popj p,
+
+;clear effective address and E+1
+clrm2:	pushj p,clrm	;do first one
+	aos b		;now go to next
+	txnn b,<777776777760> ;is it an AC?
+	jrst clrac
+	movem t,(b)
+	popj p,
+
+;clear AC and E
+clram:	pushj p,clra
+	pushj p,clrm
+	popj p,
+
+;clear AC, AC+1, and E
+clra2m:	pushj p,clra2
+	pushj p,clrm
+	popj p,
+
+;The following codes are used in the table of opcode data.  They are
+;offsets in the dispatch table above. 
+	dn==0
+	da==1
+	da2==2
+	da4==3
+	dm==4
+	dm2==5
+	dam==6
+	da2m==7
+
+;here we have a table of what to clear for each instruction
+; that can cause overflow/underflow, etc.  It simply indicates where
+; the results of that instruction go.  This table was made up when I
+; was half asleep, so please report any errors in it.  Its accuracy
+; is obviously crucial to the behavior of this code.
+zertab:	byte (6)da2,da2,da2,da2,da2,da2	;110-115
+	byte (6)da4,da4,dn,da2,da,dn	;116-123
+	byte (6)dn,dm2,da,da,da2,dam	;124-131
+	byte (6)da,dn,dn,dn,dn,dn	;132-137
+	byte (6)da,da2,dm,dam,da,da	;140-145
+	byte (6)dm,dam,da,da2,dm,dam	;146-153
+	byte (6)da,da,dm,dam,da,da2	;154-161
+	byte (6)dm,dam,da,da,dm,dam	;162-167
+	byte (6)da,da2,dm,dam,da,da	;170-175
+	byte (6)dm,dam,dn,dn,dn,dn	;176-203
+	byte (6)dn,dn,dn,dn,da,da	;204-211
+	byte (6)dm,dm,dn,dn,dn,dn	;212-217
+	byte (6)da,da,dm,dam,da2,da2	;220-225
+	byte (6)dm,da2m,da2,da2,dm,da2m	;226-233
+	byte (6)da2,da2,dm,da2m,dn,dn	;234-241
+	z				;242-247
+	z				;250-255
+	z				;256-263
+	byte (6)dn,dn,dn,dn,da,da	;264-271
+	byte (6)dm,dam,da,da,dm,dam	;272-277
+	z				;300-305
+	z				;306-313
+	z				;314-321
+	z				;322-327
+	z				;330-335
+	byte (6)dn,dn,da,da,da,da	;336-343
+	byte (6)da,da,da,da,dm,dm	;344-351
+	byte (6)dm,dm,dm,dm,dm,dm	;352-357
+	byte (6)da,da,da,da,da,da	;360-365
+	byte (6)da,da,dm,dm,dm,dm	;366-373
+	byte (6)dm,dm,dm,dm,dn,dn	;374-377
+
+;for extended addressing, use 0,,20 for stack, not 20,,20
+pdltrp:	movem	p,badpdl
+	xmovei	p,20		;[4] fake pdl - real one is garbage
+	errmsg	<No space left for stack or local variables>
+	move	t,@pcadr	;[4]
+	pushj	p,runer.	;[4] pasddt has its own stack
+	errmsg	<Can't continue without stack>
+	jrst endl
+
+
+ifn tenex,<
+;implement ERCAL and ERJMP for Tenex
+
+illins:	push	p,t
+	push	p,a
+	push	p,b
+	push	p,c
+	move	a,@pcadr	;addr of failure
+	hlrz	b,(a)		;instruction
+	cain	b,(erjmp)
+	jrst	doerjm		;simulate erjmp
+	cain	b,(ercal)
+	jrst	doerca		;simulate ercal
+	errmsg  <Illegal instruction at user PC >
+	movx	a,.priou
+	move	b,@pcadr
+	movx	c,^D8
+	nout
+	 jfcl
+	errmsg	< >
+	movx	a,.priou
+	move	b,[xwd .fhslf,-1]
+	setz	c,
+	erstr
+	 jfcl
+	 jfcl
+	haltf
+	pop p,c
+	pop p,b
+	pop p,a
+	pop p,t
+	debrk%
+
+doerjm:	move t,(a)		;get the inst
+	pop p,c
+	pop p,b
+	pop p,a
+	tlz t,777740
+	tlo t,(movei t,)
+	xct t
+	movem t,@pcadr
+	pop p,t
+	debrk%	
+
+doerca:	move t,(a)		;get the inst
+	pop p,c
+	pop p,b
+	pop p,a
+	tlz t,777740
+	tlo t,(movei t,)
+	xct t
+	exch t,@pcadr
+	addi t,1
+	exch t,(p)
+	debrk%	
+> ;ifn tenex	
+	
+subttl	initialize the interrupt system and the memory manager
+
+;special routine in case XSIR won't work (rel. 3 or Tenex)
+pasix1:	movsi	t,1		;level number goes here
+	hllm	t,chntb.+6
+	hllm	t,chntb.+7
+	hllm	t,chntb.+^D9
+	movei	a,.fhslf	;now normal SIR
+	move	b,[xwd levtab,chntb.] ;levtab,,chntab
+	sir%
+	xmovei	a,oldpc.	;the address part of the PC is here
+	movem	a,pcadr
+	ret
+
+pasix.::setzm	chntb.		;reinitialize interrupt control blocks
+	move	t,[xwd chntb.,chntb.+1]
+	blt	t,chntb.+^D35	;local blt ok here!
+	xmovei	t,ovrint
+	tlo	t,(1b5)
+	movem	t,chntb.+6
+	movem	t,chntb.+7
+	xmovei	t,pdltrp
+	tlo	t,(1b5)
+	movem	t,chntb.+^D9
+	movei	a,.fhslf		;turn on interrupts
+	xmovei	b,levtab
+	movem	b,xsirar+1
+	hllm	b,levtab		;put section numbers in here
+	hllm	b,levtab+1
+	hllm	b,levtab+2
+	xmovei	b,chntb.
+	movem	b,xsirar+2
+	xmovei	b,xsirar
+ife tenex,<
+	xmovei	t,oldpc.+1	;the address part of the PC is here
+	movem	t,pcadr
+	xsir%			;set up vector
+	 ercal	pasix1		;possibly release 3
+	movei	a,.fhslf	;set up arith trap
+	movei	b,.swart
+	xmovei	c,trpblk
+	swtrp%
+	 erjmp [move a,[popj p,]	;use interrupts - here is trap exit
+		movem a,trpxit
+		movx b,<1b9!1b6!1b7> ;and use all interrupts
+		jrst pasix2]
+	xmovei a,ovrflw		;use trap - set up dispatch
+	movem a,trpnpc
+	move a,[xjrstf trpflg]	;here is trap exit
+	movem a,trpxit
+	movx b,<1b9>		;no arith interrupt
+> ;ife tenex
+ifn tenex,<
+	call	pasix1		;if tenex, XSIR never works
+	move a,[popj p,]	;use interrupts - here is trap exit
+	movem a,trpxit
+	movx b,<1b9!1b6!1b7>	;and use all interrupts
+> ;ifn tenex
+pasix2:	movx	a,.fhslf
+	setzm	aprcnt		;ignore arith error
+	skipe	f		;[4] ignore arith. if not checking
+	setom	aprcnt		;unless asked, in which case fatal
+	aic%			;turn on conditions
+	eir%			;turn on system
+	move	a,[xwd aprcnt,aprcnt+1]
+	blt	a,aprcnt+7	;whole block
+	setzm	ovrcnt		;and clear count of errors
+
+;initialize the page table used for buffers
+
+ifn klcpu,<
+ifn se%buf,<
+	skipn	a,sn.cod	;extended addressing?
+	 jrst	buf.0		;no
+	movei	b,1		;get one section
+	clear	c,		;start from the bottom...
+	call	getsc.		;go create it
+	hlrz	a,b
+>;ifn se%buf
+ife se%buf,<move a,sn.cod> ;if buffers go with code
+buf.0:	movem	a,sn.buf	;remember the section #
+> ;ifn klcpu
+
+;here we are going to set the frepag bit table to all 1's to indicate all
+;  pages are free.  GETPG. checks for overlap with heap, which is below
+;  the code, so we won't run into the high seg.  After setting to all 1's,
+;  we then remove pages below .jbff, i.e. the low seg.
+
+bufini:	setom	frepag		;indicate all 512 pages free
+	move	t,[xwd frepag,frepag+1]
+	blt	t,frepag+15	;clear 14 words - local blt ok!
+	movsi	t,776000	;and 10 bits
+	movem	t,frepag+16
+ifn klcpu,<
+	move	a,sn.cod
+	came	a,sn.buf	;code and buffers in same section?
+	 skipa	b,[1000]	;no, prevent use of page 0 in buffer section
+> ;ifn klcpu
+	 move	b,.jbff		;now clear everything below .JBFF
+	lsh	b,-9		;get page number. b is # of pages to be clear
+	idivi	b,^D36		;b _ words to be cleared, c _ bits
+	sojl	b,pasin3	;no words, just do bits
+	setzm	frepag
+	jumpe	b,pasin3	;if one word only, do bits
+	move	t,[xwd frepag,frepag+1]
+	blt	t,frepag(b)	;clear words - local blt ok here!
+;all full words cleared, b _ # words cleared - 1
+pasin3:	jumpe	c,pasin4	;if no bits to clear, ignore
+	movx	t,<1B0>		;make mask for c bits
+	movn	c,c
+	ash	t,1(c)		;t _ xxx000, c bits on
+	andcam	t,frepag+1(b)	;clear these bits in next word
+pasin4:	call	cainit		;init heap manager (or dummy)
+	ret
+
+;getpg.
+;	a - count of number of pages desired
+;garbages a,t - result in a = [n,,page#]
+
+getpg.:	call	e.crit		;critical section
+	push	p,b
+	push	p,c
+	push	p,d
+	push	p,e
+	push	p,f
+	push	p,h
+;here we set up pagmsk in h to be xxxx0000, with x being (a) bits
+	caile	a,^D36		;be sure count is legal
+	 jrst	getptm		;too many
+	movx	h,<1B0>		;b _ 400000,,0
+	movn	c,a
+	ash	h,1(c)		;b _ xxx0000, as ash propogates the bit
+	hrlzi	b,-ln$fpg	;b - aobjn pointer to word we are looking at
+	move	d,a		;d - number of pages desired
+
+;outer loop in which we check all words
+getpl1:	move	t,frepag(b)	;first find a word in which there are free
+	setz	c,		;c - accumulate previous shifts
+
+;inner loop in which we check various starting places in word
+;Note that t gets shifted if we have to retry this
+getpl2:	jffo	t,gotbit	;if free page in this word, exit search
+	aobjn	b,getpl1	;no more bits in this word, get next
+	jrst	nofree		;ran out of words, we failed
+
+;here is the text of the inner loop
+;we have found one free page, see if we have N contiguous ones
+gotbit:	add	c,a		;c _ total shift to this bit
+	setcm	e,frepag(b)	;e,f _ complement of words being tested
+	setcm	f,frepag+1(b)
+	lshc	e,(c)		;      shifted to left justify tested bits
+	tdnn	e,h		;since complemented, if all are zero
+	 jrst	gotpgs		;then we have our pages
+;not enough bits after the one we found.  We now shift the word (in t)
+;to the beginning of the field we were considering plus one more bit.
+;this eliminates the bit our last jffo found, and causes the next one
+;to advance to the next bit.  However it requires us to keep track of
+;the total amount of shifting, which is done in c.
+	lsh	t,1(a)		;get to start of field, and gobble one bit
+	addi	c,1		;indicated shifted by one more
+	jrst	getpl2		;and see if another candidate in this word
+
+;here when we have found the free pages 
+;clear the bits in frepag array and figure out page number
+gotpgs:	move	e,h		;get mask for clearing
+	setz	f,
+	movn	a,c		;a _ neg no. of bits shifted
+	lshc	e,(a)		;e,f _ mask of bits found
+	andcam	e,frepag(b)	;clear bits in memory
+	andcam	f,frepag+1(b)
+	tlz	b,-1		;now compute b _ page number
+	imuli	b,^D36		;words times pages in a word
+	add	b,c		;and offset within word
+	lsh	b,9		;d _ addr of first page in group
+	move	c,d		;c _ number of pages in group
+	lsh	c,9		;c _ number of words in group
+	add	c,b		;c _ first address beyond
+	move	a,b		;a _ address of first page in group
+ifn klcpu,<
+	skipn	b,sn.buf	;section for buffers
+	 jrst	[caml	c,lstnew ;be sure we don't overlap heap
+		  jrst	nofree	;if we do, fatal error
+		 jrst	chkff]
+	hrli	a,(b)		;put buffers in correct section
+	came	b,sn.cod	;same section as code?
+	 jrst	pag.ok		;no, it must be ok
+	caml	c,lstnwl	;yes, make sure no overlap with GNEW.L heap
+	 jrst	nofree
+> ;ifn klcpu
+ife klcpu,<
+	caml	c,lstnew
+	jrst nofree
+> ;ife klcpu
+chkff:	camle	c,.jbff		;if we have taken more core
+	movem	c,.jbff		;  update .jbff
+pag.ok:	lsh	a,-9		;a _ page #
+	hrl	a,d		;number of pages in LH
+	pop	p,h		;saved ac's
+	pop	p,f
+	pop	p,e	
+	pop	p,d
+	pop	p,c
+	pop	p,b
+	ret			;end critical section
+
+getptm:	errmsg	<Internal error: buffer request exceeds 36 pages>
+	jrst endl
+
+nofree:	errmsg	<Request for buffer space runs into heap>
+	jrst endl
+
+ifn klcpu,<
+relwsc:	errmsg  <Buffer release specifies page in wrong section>
+	jrst endl
+> ;ifn klcpu
+
+;relpg.
+;  a - count,,page#
+;garbages a,t - arg in a
+relpg.:	call	e.crit		;critical section
+	push p,a
+	push p,b
+	push p,c
+	movsi t,400000		;t,a _ 400000...
+	setz a,
+	hlrz b,-2(p)		;number of pages
+	caile b,^D36		;be sure its legal
+	jrst getptm
+	movn b,b		;b _ - number of pages
+	ash t,1(b)		;t,a _ xxx000 with one x for each page
+	hrrz b,-2(p)		;page to return
+ifn klcpu,<
+	ldb c,[point 9,b,26]	;get section number
+	came c,sn.buf		;make sure it is in the right place
+	jrst relwsc
+> ;ifn klcpu
+	trz b,777000		;yes - clear section number
+	idivi b,^D36		;b _ word offset, c _ bit within word
+	movn c,c		;c _ - number of bits
+	lshc t,(c)		;t,a _ mask of bits to set in word
+	iorm t,frepag(b)	;clear at offset b and b+1
+	iorm a,frepag+1(b)
+	pop p,c
+	pop p,b
+	pop p,a
+	ret			;end critical section
+
+	prgend
+
+
+	TITLE PASCAI - dummy CAINIT
+
+	twoseg
+
+	reloc 400000
+
+	entry cainit
+	intern cainit
+
+cainit:	popj 17,
+
+	end
+

@@ -1,0 +1,771 @@
+	PASCAL AND PASSGO AT UTAH-20
+PASCAL is an ALGOL-like programming language defined by Nichlaus Wirth
+in 1968, and revised in 1973. The first compiler started operation in
+1970. Its popularity is increasing rapidly because of its powerful data-
+structure manipulation and type definition facilities, its clarity, 
+simplicity and straightforwardness. At UTAH-20 we have two compilers,
+called PASCAL and PASSGO, both developed from the DECUS PASCAL compiler,
+from Hamburg University. PASCAL is just like any other compiler; PASSGO
+is an INCORE compiler, that is, it will not generate a .REL file, but
+execute your program immediately. This makes it up to 30 % faster. But
+if your program is too big or if you are going to execute it several
+times, you want to use PASCAL. They both support everything described
+here, except for one thing: PASSGO will not take External Procedures.
+
+This file is designed as a REFERENCE tool for the LOTS implemantation,
+and we assume that you have PREVIOUS KNOWLEDGE of the standard PASCAL 
+language. (if not, see the DOCUMENTATION subtopic).
+
+Subtopics:	DOCUMENTATION			HOW TO USE IT
+		SWITCHES			DEBUGGING
+		KNOWN BUGS AND RESTRICTIONS	SPECIAL FEATURES
+		PROCEDURES (PREDEFINED)		FUNCTIONS (PREDEFINED)
+		OPERATORS			RESERVED WORDS
+		ASCII TABLE			STANDARD CONSTANTS AND TYPES
+		FORMATTED INPUT/OUTPUT		CROSS REFERENCES
+		MISTAKES WHICH GENERATE COMMON ERRORS						
+<DOCUMENTATION>
+
+The documentation available is:
+
+The Books: PASCAL, User Manual and Report, by Kathleen Jensen and 
+		Niklaus Wirth, available at the Bookstore. Describes
+		the standard language.
+
+	   A Primer on Pascal, by Conway, Gries and Zimmerman.
+
+The Files: DOC:PASCAL.MAN Describes the diferences between DECUS PASCAL
+			and the standard language. It is a long file.
+
+	   DOC:PASCAL.NOTES  Contains user comments on the LOTS version.
+			Useful information, not available anywhere else,
+			is found there.
+
+The command: @HELP PASCAL. You are using it.
+<HOW TO USE IT>
+
+   To use it, first create a PASCAL source program file. The file name
+should be maximum six characters long, and the extension should be .PAS
+for PASCAL, or .PGO  for PASSGO. As an example, asume you have SQUIGL.PAS
+and MYPROG.PGO. Then, proceed as follows: [lower case indicates user input]
+
+
+Calling the compiler directly. e.g., to execute the same file 
+asking for runtime code for array boundary and arithmetic checks,
+and enabling debugging, you do this:  [lower case indicates user input]
+
+	@pascal				@passgo
+	  OBJECT = first.rel		LIST =
+	  LIST =			SOURCE = first.pgo/debug/check
+	  SOURCE = first.pas/check
+
+Note that you can put the switches following any of the file names you give.
+
+With so-called compiler options in the body of your program. e.g.
+to obtain the same effect shown above, you include at the beginning of 
+your program a comment line with a $ as the first character, like this:
+
+	(*$T+,E+    the rest is comment*)
+
+Now, you can @execute or call @pascal or @passgo, whichever you want.
+
+Following is a table showing all the switches available for options 2
+(Monitor) and 3 (Source program). Note that some of them are available
+on Monitor only. The negative option, when existent, is indicated
+by the options [NO] and -.
+
+NOTES:	(*)   Specify it for the first time BEFORE the program heading.
+	(**)  Cannot be reset anymore inside the program.
+
+ ---------------------------------------------------------------------
+:Specification			  :Function			  :Default
+:Monitor	  :Source program :				  :
+:		  :		  :				  :
+ --------for both PASCAL and PASSGO------------------------------------
+[NO]CHECK         T+/T-           Perform runtime checks          ON
+[NO]DEBUG         D+/D-, P+/P-(*) Generate debug information
+CODESIZE:n        Sn              Maximum number of
+                                  code words for a body           n=1000
+REGISTER:n        Xn              Highest register used
+                                  to pass parameters              n=6
+[NO]LIST                          Generate list file              OFF
+[NO]CREF                          Generate cross reference list   OFF
+[NO]PROFILE			  Cross reference list with 
+				  Statement execution counts for
+				  Each Basic Block.		  OFF
+[NO]COMPILE                       Force compilation	          ON
+ --------PASCAL only. Ignored by PASSGO--------------------------------
+[NO]CODE          L+/L-           List object code                OFF
+[NO]EXTERN        E+/E-(**)       All level-1 procedures
+                                  and functions may be de-
+                                  clared as "EXTERN" by other
+                                  programs.			 OFF
+[NO]CARD          U+/U-(**)       Only 72 chars of the source
+                                  line are accepted (card format) OFF
+FORTIO            I+/I-           Enable FORTRAN-I/O in external
+                                  FORTRAN programs                OFF
+RUNCORE:n         Rn              Size of low-segment             n=240
+FILE:n            Fn              Necessary if files are
+                                  declared in EXTERNAL programs.
+                                  n is the number of files
+                                  already declared in the MAIN
+                                  (and/or other external)
+                                  program(s) plus 1               0
+[NO]LINK                          Call link-10 after compilation  OFF
+[NO]EXECUTE                       Load and run compiled program   OFF
+
+<DEBUGGING>
+	
+To use the PASCAL/PASSGO debugger, use the DEBUG command in place of
+EXECUTE.  You will need a numbered listing of the program, since the 
+system is linenumber oriented.
+
+
+        When the program is executed, the first thing it types
+	(after the request to hit RETURN, if you are using TTY),
+	is the next message, at an initial, system-set breakpoint:
+	
+		$DEBUG: <program name>
+		$
+	
+	At this point, you can type one or more of the next commands:
+	
+STOP <line>		Sets a new breakpoint at <line>,
+	 where <line> is of the form linenumber/pagenumber (or just linenumber
+	 which is equivalent to linenumber/1) -	e.g.: 120/3 - . A  maximum of
+	 20 breakpoints may be set simultaneously.
+	
+STOP NOT <line>		clears a previously set breakpoint.
+	
+STOP LIST		Lists the currently set breakpoints.
+	
+<variable> =		displays the current value of <variable>.
+	 <variable> may be any variable as allowed by the PASCAL definition.
+	 In particular it may be just a component of a structured variable or
+	 the whole structure itself.  The  buffervariable  FILNAM^  connected
+	 with  the  file  identifier  FILNAM  as  well as the file identifier
+	 itself can be accessed. If the  file  identifier  is  examined,  the
+	 contents of the "file control block" are given.
+	
+STACKDUMP		generates a .TXT file with a source-level dump of the
+	 current stack.
+	
+HEAPDUMP		generates a .TXT file with a source-level dump of the
+	 current heap. After STACKDUMP or HEAPDUMP the next message appears:
+	
+		$LOOK FOR DUMP ON FILE XXXXXX.PMD
+	
+	 where XXXXXX is some fantasy name.
+	
+<variable> := <variable or constant>		Assigns a new value to a
+	 variable. The assignment follows the usual type rules of PASCAL.
+	 Any type of variable, including user-defined types, may be changed
+	 in this manner. Array elements can be changed (indices may be
+	 constants or variables), but sets cannot.
+TRACE		Displays the currently active call sequence.
+	 The names of the procedures and functions and their active line 
+	 numbers are  printed  in  reverse  order   of	their activation.
+	
+END		Continues program execution.
+	 The  program  will  run until another breakpoint is encountered. The
+	 breakpoint is announced by
+	
+		$STOP AT <line>
+		$
+
+NOW: BESIDES THESE BREAKPOINTS, DOES IT STOP ANYWHERE ELSE?
+	
+	YES. There are three cases:
+
+	(1)  When a runtime error happens.
+	(2)  If you hit ^C^C.
+	(3)  If it finds a call to the parameterless procedure HALT.
+
+	The message typed will indicate the reason for the stop.
+	In cases (1) and (2) above, it is possible that, instead of entering
+	a breakpoint, it simply quits and gives you the @ prompt. To this
+	you type DDT and the breakpoint will be entered with the message:
+	
+	  	$STOP BY DDT COMMAND IN <program name>
+		$STOP IN <line>:<line>
+		$
+	
+	    In all the above cases, if the program is in "batch mode",
+	instead of entering a breakpoint a Post-Mortem dump is generated.
+ 
+TO DEBUG EXTERNAL PROGRAMS:	(not available in PASSGO)
+	
+	   If the main program and/or several  external  programs  have  been
+	 compiled  with  the  DEBUG-option,  it  is the loading sequence -the
+	 sequence in which the programs are specified  in  the	LOAD-command-
+	 that indicates which program is to  be  debugged.   ONLY  the	first
+	 program in the loading sequence may be debugged provided it has been
+	 compiled with the DEBUG-option.
+	
+	Example:
+	
+		@LOAD MAIN, P1, P2		MAIN can be debugged
+		@LOAD P1, MAIN, P2		now P1 can be debugged
+
+<KNOWN BUGS AND RESTRICTIONS>
+   
+BUGS:
+-----
+1) If the device-parameter for RESET/REWRITE is not
+          defaulted, new buffers are allocated without regard
+          to the fact that the new device could be the same as the
+          the old device.
+2) Comparison of variables of type PACKED RECORD or
+          PACKED ARRAY may cause trouble if these variables appear
+          in a variant part or were assigned from a variant part
+3) Too large array dimensions (e.g. MININT..MAXINT) cause
+          arithmetic overflow instead of an appropriate error message.
+5) The comparison of PACKED ARRAY [1..n] OF CHAR is made by arithmetic
+	  word-compare,where the most significant bit in a word represents
+	  the sign, which produces weird results.
+6) The Heap is managed as a stack which means that DISPOSE will delete from
+	  the Memory the variable you ask it to delete, but it will also 
+	  delete ALL the variables created by NEW after that one.
+7) The functions MIN and MAX, when called on more than two arguments,
+	enter an infinite loop.
+
+RESTRICTIONS:
+-------------
+1) Arrays of file and records with files as components are not implemented
+2) Segmented files are not implemented
+3) Call of external COBOL or ALGOL procedures is not implemented.
+4) Program File parameters intended for input should be followed by an
+	asterisk.
+5) A maximum of 12 files may be declared by the user.
+6) The maximum SET size is 72 elements.
+7) A range of SET elements in a set must be given using constant bounds
+	  only. (no expression as bound is allowed).
+8) When using field size in WRITE statements (e.g. WRITE(x:a+2);), the value
+	  given is not the minimum, but the FIXED field size. If it is not
+	  big enough, Integers and reals will be substituted with asterisks
+	  and all other valid simple types will be right-truncated.
+
+<SPECIAL FEATURES>
+
+***********************************************************************
+*   WARNING!!!  These are NOT (repeat, they ARE NOT) STANDARD PASCAL  *
+*	features, which means:					      *
+*	(a) if you want your programs to be PORTABLE (to run in other *
+*		computers) you should NOT use them.		      *
+*	(b) if you use PASCAL in other installations, you DON'T have  *
+*		the guarantee that these features will be there.      *
+*	(c) if someone who knows PASCAL reads your programs, maybe    *
+*		he/she will NOT understand them completely.	      *
+***********************************************************************
+
+1)  You can use the underline (_) symbol in identifiers for more clarity.
+
+2)  You can use the label OTHERS in CASE statements, to cover all the 
+	possible values that are not covered by other labels in the same
+	statement.
+
+3)  There is a LOOP statement which works like the WHILE .. DO and 
+	REPEAT .. UNTIL statements, except that you decide where is the 
+	checking to be done. The format is:
+
+		LOOP
+		   <statment part>
+		EXIT IF <boolean expression>;
+		   <statement part>
+		END
+
+	<statement part>::=<statement> [;<statement>]*
+
+4)  There are a group of 'standard' procedures and functions which can 
+	be very useful. See the details in the manual available at LOTS.
+	see also a list with brief descriptions in the subtopics:
+		PROCEDURES (PREDEFINED) and
+		FUNCTIONS  (PREDEFINED)
+
+5)  You can represent the integer constants in their octal or hexadecimal
+	value. To make it octal, you add a B at the end (e.g. 15B is 15 
+	octal, or 13 decimal), and to make it hexadecimal you begin it 
+	with quotes (") (e.g. "2A3F5 ).
+
+
+<PROCEDURES (PREDEFINED)>
+
+	NOTE: The optional parameters in NEW, DISPOSE, RESET, REWRITE, PACK
+		and UNPACK, and the definition of ALL the other procedures
+		ARE NOT STANDARD PASCAL. for a complete list of procedures,
+		see the RESERVED WORDS subtopic.
+
+NOTE: the BNL notation is used, as described in the USER MANUAL AND REPORT.
+	Remember: brackets [ ] indicate optional. If followed by a star (*),
+		  they mean "zero or more times"
+
+INITPROCEDURE		Admits only assignment statements.
+
+PACK(A,I,Z[,J[,L]])	Equivalent to:  FOR k:=0 TO l-1 DO z[j+k]:=a[i+k];
+UNPACK(Z,A,I[,J[,L]])	Equivalent to:  FOR k:=0 to l-1 DO A[i+k]:=z[j+k];
+	defaults for both: J:=lowerbound(z);
+			   L:=1+MIN(upperbound(z)-j, upperbound(a)-i);
+
+DATE( <alfa variable> )	Assigns to the alfa variable the current date.
+TIME( <alfa variable> )	Assigns to it the value of the current daytime.
+	format for both:  'dd-mmm-yy'  and 'hh:mm:ss '
+
+NEW( <pointer variable> [,<tagfield constant>]* [: <integer expression>] )
+			allocates variables in the heap, as described in the
+			User Manual and Report. The integer expression is
+			used to define the size of an array, when it (the
+			array) is the last component of the variable.
+DISPOSE( <same as NEW> )   Frees the space that was used by the variable 
+			pointed by <pointer variable> AND ALL VARIABLES THAT
+			WHERE CREATED BY NEW AFTER THAT VARIABLE. Notice that
+			This can be harmful if not used properly.
+
+HALT			produces a breakpoint at runtime if the DEBUG option
+			was used.
+
+CALL( <file name and extension>)	TERMINATES the execution of this
+			program and starts execution of the one contained
+			in the file called.
+
+RESET and REWRITE have extra optional parameters also. See sec. 5.7.12.
+
+BREAK( <file variable> )	forces output even when the corresponding 
+			buffer is not yet full. Useful for interactive files
+			like TTY.
+MESSAGE( <argument list> )	is equivalent to:
+			WRITELN(TTY); WRITELN(TTY, <argument list>);
+			BREAK(TTY);
+
+GETLN( <text file variable> )	advances the file to the next line-feed and
+			GETs the next charachter. Skips line numbers and
+			page marks.
+GETLINENR( [<file variable>,] <variable of type PACKED ARRAY[1..5] OF CHAR> )
+			Assigns to the pack.. variable the line number of the 
+			last line GETLNed. If there was a page mark, it 
+			assigns blanks.
+PUTLN( <file variable> )	PUTs a carriage-return-line-feed in the file.
+PAGE [( <file variable> )]	PUTs a page-mark in the file, which has to be
+			of type text. OUTPUT is assumed by default.
+
+GETOPTION( <alfa var or const>,<integer var> )	For hackers. Returns in 
+			the <integer var> the numeric value associated with
+			the option. (see OPTION in the FUNCTIONS subtopic)
+GETFILENAME( <many parameters> )	Hacky way to read a file name and
+			atributes. See the manual for details.
+GETSTATUS( <many parameters> )		For hackers only.
+	For details on these procedures, see the PASCAL and PASSGO AT
+	LOTS manual, or the file DOC:PASCAL.man, sec. 5.7.11.
+
+<FUNCTIONS (PREDEFINED)>
+
+	NOTE: Except for TRUNC and ROUND, NONE of these functions is STANDARD
+		PASCAL, so portable programs should not use them. for a 
+		complete list of functions, see the RESERVED WORDS subtopic.
+
+FIRST ( <variable> )	Returns the lowest value of the range of the type
+			of the variable. It can be any type, except real.
+LAST ( <variable> )	Like FIRST, except that it finds the highest value.
+
+LOWERBOUND ( <array variable> )		Returns the lowest value of the 
+			range of the index type. To ask for that of the 
+			second or higher index, you assign a value to the
+			previous ones. (e.g. Lowerbound(a[1,'a']) will give
+			you that of the third index.
+UPPERBOUND ( <array variable> )		Like LOWERBOUND, except that it finds
+			the highest value.
+MIN( <expression>, <expression> )	Returns the minimum value among
+			the two expressions.
+MAX( <expression>, <expression> )	Same as MIN, except that it finds
+			the maximum.
+
+TRUNC( <expression> )	Opposite to what is described in the User Manual and
+			Report, it is defined as The greater integer less 
+			than or equal to the argument, IN ALL CASES. So, 
+			TRUNC(-5.13) is -6., not -5.
+ROUND( <expression> )	TRUNC( <expression>+0.5 ). Notice the effect of the
+			definition of TRUNC, from which ROUND(-0.5) is 0.,
+			not -1.
+EXPO( <real or integer expression> )	Returns the integer part of the
+			base 2 logarithm of the expression.
+
+OPTION( <alfa variable or constant> )	For hackers. Returns true if the
+			option in the argument was included when calling the
+			program or giving the names for file parameters.
+
+<OPERATORS>
+
+Operator	Operation	Type of Operand(s)	Result Type
+----------Arithmetic-------------------------------------------------
+  + (unary)	identity	INTEGER or REAL		same as operand
+  - (unary)	sign inversion			
+  +		addition				INTEGER or REAL
+  -		subtraction		
+  *		multiplication
+  /		REAL division				REAL
+  DIV		INTEGER div.	INTEGER			INTEGER
+  MOD		modulus		INTEGER		
+----------Relational-------------------------------------------------
+  =		equality	any scalar, string,	BOOLEAN
+				SET or pointer
+  <>		inequality	
+  <		less-than	any scalar or string
+  >		greater-than	
+  <=		less-equal,	any scalar, string,
+		set inclusion	or SET
+  >=		greater-equal,
+		set inclusion
+  IN		set membership	1st op. scalar,
+				2nd op. its SET type
+----------Logical----------------------------------------------------
+  NOT		negation	BOOLEAN			BOOLEAN
+  OR		disjunction	
+  AND		conjunction
+----------SET--------------------------------------------------------
+  +		set union	SET			same type
+  -		set difference	
+  *		set intersection
+----------Assignment-------------------------------------------------
+  :=		assignment	any compatible types	---
+				except file types
+---------------------------------------------------------------------
+ 
+PRECEDENCE
+----------
+	ARITHMETIC 		LOGICAL		SET
+-------------------------------------------------------------
+1st	  + (unary) - (unary)	  NOT
+-------------------------------------------------------------
+2nd	  MOD, DIV, *, /	  AND		  *
+-------------------------------------------------------------
+3rd	  +, -			  OR		  +, -
+-------------------------------------------------------------
+4th	  =, <, <=, <>, >, >=	  same as arith.  <=, >=, IN
+-------------------------------------------------------------
+ 
+<RESERVED WORDS>
+
+  IF, DO, OF, TO, IN, OR,
+  END, FOR, VAR, DIV, MOD, SET, AND, NOT,
+  THEN, ELSE, WITH, GOTO, LOOP, CASE, TYPE, FILE, EXIT,
+  BEGIN, UNTIL, WHILE, ARRAY, CONST, LABEL,
+  EXTERN, RECORD, DOWNTO, PACKED, OTHERS, REPEAT,
+  FORTRAN, FORWARD, PROGRAM,
+  FUNCTION,
+  PROCEDURE, SEGMENTED,
+  INITPROCEDURE
+ 
+PROCEDURES
+----------
+   Procedures marked with (*) are also defined	in  PASCAL  6000-3.4,
+ those	marked	with  (**)  only  in  DECSystem-10 PASCAL. The marked
+ procedures and functions are not part of STANDARD PASCAL.
+
+  Input/Output:
+	RESET, REWRITE, GET, PUT, PAGE, READ, READLN, WRITE, WRITELN,
+	MESSAGE (*), GETLN (**), PUTLN (**), GETLINENR (**),
+	BREAK (**)
+  Execution Control:
+	HALT (*), CALL (**)
+  Allocation of Dynamic Storage:
+	NEW, DISPOSE (*)
+  Communication with the Enviroment:
+	DATE (*), TIME (*), GETFILENAME (**), GETSTATUS (**),
+	GETOPTION (**)
+ 
+FUNCTIONS
+---------
+Function 	Type of Argument(s)	Result Type
+----------STANDARD PASCAL--------------------------------------------
+ARCTAN		INTEGER or REAL		REAL
+COS
+EXP
+LN
+SIN
+SQRT
+ABS					INTEGER or REAL
+SQR						
+ROUND					INTEGER
+TRUNC					INTEGER
+ODD		INTEGER			BOOLEAN
+EOF		any file			
+EOLN		TEXT 		
+PRED		scalar except REAL	argument type
+SUCC			
+CHR		INTEGER			CHAR
+ORD		scalar or pointer	INTEGER
+----------PASCAL 6000-3.4--------------------------------------------
+CARD		any SET			INTEGER
+CLOCK		---				
+EXPO		REAL				
+----------DECSystem-10 PASCAL----------------------------------------
+ARCCOS		INTEGER or REAL		REAL
+ARCSIN
+COSD
+COSH
+LOG
+RANDOM					0.0..1.0
+SIND					REAL
+SINH
+TANH
+REALTIME	---			INTEGER
+OPTION		ALFA			BOOLEAN
+FIRST		any scalar except REAL	argument type
+LAST
+LOWERBOUND	array			array index type
+UPPERBOUND
+MIN		scalar except BOOLEAN	scalar type
+MAX
+
+<ASCII TABLE>
+
+   The PASCAL character set (the  type	CHAR)  is  encircled  in  the
+ following table. The two- and three-letter words for codes 0-37 and 177
+ are predefined as constants of the type ASCII.
+
+
+(least significant octal digit across)
+
+To enter octal constants in Pascal, add a'B'
+to the number, as in 101B to mean 65 decimal, the code for
+'A'.
+
+	    0	1   2	3   4	5   6	7
+	00  NUL SOH STX ETX EOT ENQ ACK BEL
+	01  BS	HT  LF	VT  FF	CR  SO	SI
+	02  DLE DC1 DC2 DC3 DC4 NAK SYN ETB
+	03  CAN EM  SUB ESC FS	GS  RS	US
+      ---------------------------------------
+      | 04  SP	!   "	#   $	%   &	'   |
+      | 05  (	)   *	+   ,	-   .	/   |
+      | 06  0	1   2	3   4	5   6	7   |
+      | 07  8	9   :	;   <	=   >	?   |
+      | 10  @	A   B	C   D	E   F	G   |
+      | 11  H	I   J	K   L	M   N	O   |
+      | 12  P	Q   R	S   T	U   V	W   |
+      | 13  X	Y   Z	[   \	]   ^	_   |
+      ---------------------------------------
+	14  `	a   b	c   d	e   f	g
+	15  h	i   j	k   l	m   n	o
+	16  p	q   r	s   t	u   v	w
+	17  x	y   z	{   |		DEL
+
+<STANDARD CONSTANTS AND TYPES>
+
+INTEGER :
+	      MININT = 400000000000B (* -34,359,738,368 *);
+	      MAXINT = 377777777777B (* +34,359,738,367 *);
+
+REAL :
+	      MAXREAL	= 1.7014118432E+38;
+	      SMALLREAL = 1.4693680107E-39;
+
+ASCII :	      NUL..SP and DEL 		(ASCII mnemonics for special
+	control  characters)  are  primarily  intended   to   ease   special
+	I/O-operations. see the subtopic ASCII TABLE for a complete list.
+
+		Example:  WRITE(TTY,BEL) instead of WRITE(TTY,CHR(07B))
+
+   The	type  ASCII  represents  the total 7-bit-ASCII character set.
+ It is a superset of CHAR.
+
+	TYPE ASCII = NUL..DEL;
+	     CHAR  = ' '..'_';
+
+ Thus,	ASCII  and CHAR are type-compatible and assignments from CHAR
+ to ASCII and  reverse are legal  provided only  values  belonging to
+ the  subrange CHAR are assigned to a variable of that type.
+<FORMATTED INPUT/OUTPUT>
+
+FORMATTED INPUT
+---------------
+procedures: READ and READLN	default file: INPUT
+parameters: Number unlimited. No constants nor elements of packed structures
+		allowed. Valid types:
+
+	Parameter
+	Type	   Restriction on the input representation.
+      ---------------------------------------------------------------
+	INTEGER	   -MAXINT <= value <= MAXINT
+	REAL	   SMALLREAL <= ABS( value ) <= MAXREAL
+	CHAR	   none
+	ASCII	   none
+	BOOLEAN    TRUE or FALSE
+	scalar	   type must be declared inside the program
+	subrange   FIRST(parameter) <= value <= LAST(parameter)
+	'string'   must be a correct string-constant
+	SET	   must be a correct SET-constant
+
+		Here, 'string' stands for PACKED ARRAY[I..J] OF CHAR.
+ 
+FORMATTED OUTPUT
+----------------
+Procedures: WRITE and WRITELN		default file: OUTPUT
+Parameters: Unlimited Number. May be followed by a format. forms allowed:
+
+	X : E1
+	X : E1 : E2
+
+E1...   Field width. Positive Integer expression. Default values:
+
+	INTEGER      12
+	BOOLEAN       6
+	CHAR	      1
+	ASCII	      1
+	REAL	     16
+	ALFA	     10
+	scalar	     10
+	'string'     the length of the string
+	SET	     the default field width of the SET element type
+
+		Here, 'string' stands for a string constant or a 
+		PACKED ARRAY[I..J] OF CHAR.
+
+	If the field width is not big enough, INTEGER and REAL values are
+	replaced by asterisks. ALL other types are left justified.
+	If it is too big, the value is right justified. The minimum E1 for
+	reals is 8.
+
+E2...   for REAL numbers: if included, the value will be printed as a fixed
+	point number with E2 decimal places. E2 is a positive integer 
+	expression such that E1-E2 be big enough for the integer part.
+	Otherwise, asterisks will be printed.
+
+	for INTEGER values: E2 can be the letter O or the letter H.
+	if O is used, the value will be printed in octal representation
+	in 12 places. If E1 too small, it will be right justified.
+	If H is used, it will be printed in hexadecimal representation
+	in 9 places. Note that the symbols B at the end (for octal), or
+	" at the start (for hex.) will NOT be printed.
+
+<CROSS REFERENCES>
+
+    Pascal has a cross-referencing program called PCROSS. Its output consists
+of two files called CROSSLIST and NEWSOURCE.  NEWSOURCE contains a copy
+of your input file, prettyprinted (that is, standard indentation and casing,
+left margin alignment, newline on standard places in the program, etc.);
+CROSSLIST consists of (a) a prettyprinted version of the program,
+showing in the left margin the relations between BEGIN..END pairs,
+THEN..ELSE pairs, etc. (b) a cross reference of all the identifiers, 
+(c) a report of procedure and function declaration nesting,
+(d) a report of proc-func call nesting.
+
+TO USE IT:	You can (a) use the /CREF switch when @EXECUTEing your
+program or calling @PASCAL, (b) call it directly by typing @PCROSS,
+or (c) use the /PROFILE switch when @EXEC, in which case you get in
+CROSSLIST the counts of execution for each basic block.
+In the first case, PCROSS will be called immediately after compilation.
+PCROSS will ask you for the names of the files. At that moment, you can
+also give any switches you want to use. Here are two sample calls:
+
+	@pcross		and		@exec myprog/cref
+	OLDSOURCE= myprog.pas
+	NEWSOURCE= myprog.pas/case:u
+	CROSSLIST= /nocross
+
+In the first one you are calling PCROSS directly, to generate a new
+version of the source myprog.pas, forcing all the text to be upper
+case. In the second one you are calling it at compilation time, creating
+myprog.new with the default casing, and sending the cross references
+to a file called myprog.crl.
+
+The default casing is as follows:
+	Reserved words:		Upper case.
+	Strings:		Upper case.
+	Comments:		Lower case.
+	Other words:		Lower case.
+
+You can change the case by using the appropriate switches. Since 
+PASCAL programs see all input in upper case, there is no way to
+let the output look exactly like the input.
+
+To see the casing and all other switches available, ask @HELP PCROSS,
+and see the SWITCHES subtopic.
+<MISTAKES WHICH GENERATE COMMON ERRORS>
+
+The compile-time error messages of PASCAL are often confusing to new users
+simply because the compiler, when it gets confused, doesn't always correctly
+interpret the error which confused it. The following totally useless 
+program was written for the purpose of generating some common compile-time
+errors while including comments which explain exactly what caused the errors.
+
+
+
+program saytisntso;
+
+const target = 95;
+var number: integer; 
+
+procedure zero;
+begin
+   number := 0
+end;
+
+begin
+   read (tty, number);
+   writein (tty, number);  (* WRITELN is spelled wrong *)
+   number = number + 1;  (* used "=" instead of ":=" *)
+   write (tty, 'hello')
+   write (tty, number); (* the PREVIOUS line is missing a semi-colon*)
+   if number = target or number = target - 1 then (* parentheses needed *)
+   write ('i'm getting bored'); (* should be ('i''m getting bored)' *)
+   if (number := target) then  (* used ":=" instead of "=" *)
+   zero; else number := 3;   (* do not put a semi-colon before an ELSE *)
+   if zero = 3 then number := 4  (* used a procedure as a variable *)
+end; (* use a period after the final END, not a semi-colon *)
+
+Now the compilation:
+
+
+
+
+
+@ex errORS.PGO 
+
+PASSGO: ERRORS [ SAYTISNTSO ] PAGE  1..
+  130      WRITEIN (TTY, NUMBER);  (* WRITELN IS SPELLED WRONG *)
+PAGE   1         ^  ************^                                
+1.^:  IDENTIFIER NOT DECLARED  
+2.^:  ":=" EXPECTED  
+  140      NUMBER = NUMBER + 1;  (* USED "=" INSTEAD OF ":=" *)
+PAGE   1          ^***********^                                
+1.^:  ILLEGAL SYMBOL 
+2.^:  ":=" EXPECTED  
+  160      WRITE (TTY, NUMBER); (* THE PREVIOUS LINE IS MISSING A SEMI-COLON*)
+PAGE   1       ^**************                                                
+1.^:  STATEMENT MUST END WITH ";","END","ELSE"OR"UNTIL" 
+  170      IF NUMBER = TARGET OR NUMBER = TARGET - 1 THEN (* PARENTHESES NEEDED
+ *)
+PAGE   1                                ^******* ^                             
+   
+1.^:  ILLEGAL SYMBOL 
+2.^:  ILLEGAL TYPE OF OPERAND(S)    
+  180      WRITE ('I'M GETTING BORED'); (* SHOULD BE ('I''M GETTING BORED)' *)
+PAGE   1             ^***************************************************    ^
+1.^:  ILLEGAL SYMBOL 
+2.^:  STRING CONSTANT CONTAINS "<CR><LF>"
+  190      IF (NUMBER := TARGET) THEN  (* USED ":=" INSTEAD OF "=" *)
+PAGE   1    ^          ^*******     ^                                
+1.^:  STATEMENT MUST END WITH ";","END","ELSE"OR"UNTIL" 
+2.^:  ILLEGAL SYMBOL 
+3.^:  TYPE OF OPERAND(S) MUST BE BOOLEAN 
+  200      ZERO; ELSE NUMBER := 3;   (* DO NOT PUT A SEMI-COLON BEFORE AN ELSE 
+*)
+PAGE   1            ^************                                              
+  
+1.^:  ILLEGAL SYMBOL 
+  210      IF ZERO = 3 THEN NUMBER := 4  (* USED A PROCEDURE AS A VARIABLE *)
+PAGE   1         ^                                                           
+1.^:  IDENTIFIER IS NOT OF APPROPRIATE CLASS  
+  220   END; (* USE A PERIOD AFTER THE FINAL END, NOT A SEMI-COLON *)
+PAGE   1   ^                                                         
+1.^:  ILLEGAL SYMBOL 
+
+  15 ERROR(S) DETECTED
+
+   COMPILE RUNTIME: 00:03.336      ELAPSED: 00:01:41.2
+
+EXECUTION SUPPRESSED.
+
+EXIT
+
+

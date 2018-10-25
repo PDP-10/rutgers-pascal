@@ -1,0 +1,408 @@
+	TITLE PASLNK - MODULE TO RETURN STUFF FROM SCAN TO PASREL
+	TWOSEG
+
+;edit history
+
+;2 - modify pushf so caller can detect problems in openning file
+;3 - add clribf to clear input buffer on compile error
+;4 - for tenex simulate PPNST
+;5 - add curname to do JFNS
+
+	search monsym,pasunv,uuosym,macsym
+	sall
+	.direc	sfcond
+	.direc	flblst
+
+	opdef ppnst[jsys 557]
+
+	lookl==6	;length of lookup block made by passcn
+	openl==3	;length of open block
+	pathl==9	;length of path block made by passcn
+	infil==b	;ac containing file block for input
+	outfil==c	; " output
+	relfil==d	; " rel file
+	file==e		; " current file block
+	data==f		; " current data block from passcn (lookl+openl+pathl)
+	bptr==g		; " byte pointer for making up file spec
+	bptr6==h	; " byte pointer for sixbit conversion
+	gjfl==11	;flags for gtjfn in pascnv
+
+
+	reloc	0
+oldf:	block	filcmp+1
+oldfen=.-1
+errfcb:	block	1		;save initial arg here
+
+ln$spc== <<^D160>/5>+1		;tops-20 file specs can be very long
+spec:	block	ln$spc
+
+	RELOC	400000
+	ENTRY	PASPRM, PASXIT
+	entry	clribf,curnam
+	entry	pushf, popf
+	extern	resetf,clofil
+	extern	relfcb,inblk,outblk,relblk
+	extern	initb.,init.b,calscn,relnam,input,output
+ifn klcpu,<extern	sn.cod>
+
+pasprm:	movem	relfil,relfcb	;store for restart
+	movem	e,errfcb	;save for later
+	move	file,infil	;convert input file spec
+	xmovei	data,inblk
+	movsi	gjfl,(gj%old)
+	pushj	p,pascnv
+	move	file,outfil
+	xmovei	data,outblk
+	movsi	gjfl,(gj%fou)
+	pushj	p,pascnv
+	move	file,relfil
+	xmovei	data,relblk
+	movsi	gjfl,(gj%fou)
+	pushj	p,pascnv
+	pushj	p,errnam	;generate name for .ERR file
+	xmovei	a,relnam	;beginning of parameter block to return
+	movem	a,1(p)		;place PASCAL expects returned thing
+	ret
+
+;Here to generate name.ERR
+errnam:	push	p,a
+	push	p,b
+	push 	p,c
+	push	p,d
+	move	a,[point 7,spec]
+	move	b,[point 7,relnam] ;main prog name
+	movei	c,6		;max number of chars
+errnm1:	ildb	d,b
+	caie	d,0		;stop at nul or blank
+	cain	d,40
+	jrst	errnm2
+	idpb	d,a
+	sojg	c,errnm1
+errnm2:	move	b,[point 7,[asciz /.ERR.0/]]
+errnm3:	ildb	d,b
+	jumpe	d,errnm4
+	idpb	d,a
+	jrst	errnm3
+errnm4:	setz	d,
+	idpb	d,a
+	movx	a,<gj%flg!gj%sht>
+	hrroi	b,spec
+	gtjfn%
+	 jrst .+2
+	jrst	errnmx
+	movei	a,.priou	;to tty
+	hrloi	b,.fhslf	;this process
+	setz	c,		;as many bytes as you like
+	erstr%
+	 jfcl
+	 jfcl
+	tmsg	< - >
+	hrroi	a,spec
+	psout%
+	tmsg	<
+% Errors will not be written to file
+>
+	movx	a,<gj%flg!gj%sht>
+ife tenex,<	hrroi	b,[asciz /NUL:/]>
+ifn tenex,<	hrroi	b,[asciz /NIL:/]>
+	gtjfn%
+	 jrst .+2
+	jrst errnmx
+
+	tmsg	<
+? Can't open NUL: either - you lose...
+>
+	haltf
+	jrst .-1
+
+errnmx:	move	b,errfcb
+	pushj	p,initb.
+	movem	a,filjfn(b)
+	pop	p,d
+	pop	p,c
+	pop	p,b
+	pop	p,a
+	ret
+
+pascnv:	push	p,a		;these ac's will be used in jsys's
+	push	p,b
+	push	p,c
+	setzm	spec		;clear spec area
+	move	a,[xwd spec,spec+1]
+	blt	a,spec+ln$spc-1	;local blt ok here!
+	move	bptr,[point 7,spec]
+
+;copy device name
+	move	bptr6,[point 6,lookl+1(data)]
+	movei	a,6
+	pushj	p,from6
+	movei	a,":"
+	idpb	a,bptr
+
+;copy directory name (if PPN given)
+	skipn	b,.rbppn(data)
+	jrst	pascn3		;no PPN
+	move	a,[point 7,spec]	;overwrite old device with dev:direct
+
+ife tenex,<
+	move	c,a		;c _ device to which PPN applies
+	ppnst
+	 erjmp	badcnv
+	move	bptr,a		;updated output ptr to bptr
+> ;ife tenex
+
+ifn tenex,<
+ ;[4] output a directory name from PPN using DIRST.  Some sites (SUMEX) have 
+ ;a SCN7B which knows about tenex directory names, so one may say:
+ ;obj_<directory>source, rather than obj_source[1,dir#]
+	movei	c,"<"
+	idpb	c,a		;open the directory name
+	movei	b,0(b)		;DIRST needs dir # in RH
+	dirst
+	 erjmp	badcnv		;in case it fails
+	movei	c,">"
+	idpb	c,a		;close the directory name
+	move	bptr,a		;updated output ptr to bptr
+> ;ifn tenex
+
+;copy file name
+pascn3:	move	bptr6,[point 6,.rbnam(data)]
+	movei	a,6
+	pushj	p,from6
+	movei	a,"."
+	idpb	a,bptr
+
+;copy extension
+	move	bptr6,[point 6,.rbext(data)]
+	movei	a,3
+	pushj	p,from6
+
+;now get the jfn
+	movx	a,<gj%flg!gj%sht> ;short jfn, returning flags
+	move	b,[point 7,spec]
+tryjfn:	ior	a,gjfl		;input or output flags
+	gtjfn%
+	 erjmp	badcnv
+	move	b,file
+	pushj	p,initb.
+	movem	a,filjfn(file)
+	pop	p,c
+	pop	p,b
+	pop	p,a
+	ret
+
+;here if error in converting file spec - get from tty:
+badcnv:	errmsg	<PASCNV - >
+	movei	a,.priou	;to tty
+	hrloi	b,.fhslf	;this process
+	setz	c,		;as many bytes as you like
+	erstr%
+	 jfcl
+	 jfcl
+	tmsg	< - >
+	hrroi	a,spec
+	psout%
+	tmsg	<
+New file spec: >
+	movx	a,<gj%msg!gj%cfm!gj%fns!gj%flg!gj%sht>
+	move	b,[.priin,,.priou]
+	jrst	tryjfn		;now try again
+
+;routine to put sixbit thing in the spec
+from6:	ildb	c,bptr6
+	jumpe	c,cpopj
+	addi	c,40
+	idpb	c,bptr
+	sojg	a,from6
+cpopj:	ret
+
+clribf:	movei	a,.priin
+	cfibf%			;clear input buffer
+	ret
+
+;curname(file,string)
+;  put current file spec into string
+;b - FCB
+;c - string addr
+;d - string length
+
+curnam:	addi	d,4		;d _ string length in words
+	idivi	d,5
+	move	t,[ascii /     /] ;now init string to blanks
+	movem	t,(c)
+ifn klcpu,<
+	skipe	sn.cod		;skip if extended addressing
+	 jrst	[move	bix,b	;save b
+		movei	t,-1(d)	;# words to fill with blanks
+		xmovei	a,(c)
+		xmovei	b,1(a)
+		extend	t,[xblt]
+		move	b,bix
+		jrst	bltdon]
+>;ifn klcpu
+	hrli	a,(c)	;single section, local blt.
+	hrri	a,1(c)
+	add	d,c
+	blt	a,-1(d)
+bltdon:	
+ifn klcpu,<
+	xmovei	bix,(c)		;now do jfns
+	movx	a,<point 7,(bix)>
+> ;ifn klcpu
+ife klcpu,<
+	movx	a,<point 7,>
+	hrr	a,c
+> ;ife klcpu
+	hrrz	b,filjfn(b)
+	move	c,[exp 111110000001] ;full file spec
+	setz	d,
+	jfns%
+	movei	t," "		;put blank in over null at end
+	idpb	t,a
+	ret
+
+pasxit:	xmovei	b,input
+	setz	c,
+	pushj	p,clofil
+	xmovei	b,output
+	setz	c,
+	pushj	p,clofil
+	move	b,relfcb
+	setz	c,
+	pushj	p,clofil
+	movei	a,.fhslf	;clear SWTRP if any from this fork
+	movei	b,.swart	;  set function
+	movei	c,0		;  0 means clear it
+	swtrp%
+	 erjmp	.+1		;not impl?
+	jrst	calscn
+
+pushf:	hrl	a,b		;copy old fcb
+	hrri	a,oldf
+	blt	a,oldfen	;local blt ok here
+	pushj	p,init.b	;reinit fcb
+	setz	a,		;indicate text file
+	seto	e,		;[2] so we can see errors
+	setzb	f,g		;[2]
+	movei	h,30		;[2] let us see open errors and EOL char
+	pushj	p,resetf
+	ret
+
+popf:	push	p,b
+	setz	c,
+	pushj	p,clofil
+	pop	p,b
+	hrli	a,oldf
+	hrr	a,b
+	blt	a,filcmp(b)	;local blt ok here
+	ret
+
+entry ctpcom,idcomp
+
+;Procedures to compare names - in assembly language for speed, since
+;symbol table lookup tends to be critical.  I have traded space for
+;speed - this code is fairly long, but should be on average very fast.
+;return -1, 0, or +1 depending upon whether 1st arg is less, equal
+;or greater than second.
+
+;CTP: 1st 10 char's - 2 words
+;     LH - count of chars,, RH - pointer to extra words
+;IDLEN - count of char's
+;ID - 1st 10 char's, as 2 words passed by value
+;IDEXT - addr of extra words
+
+;CTPCOM(CTP1,CTP2) - two CTP's.
+
+ctpcom:	setzm 1(p)		;assume equal
+
+;counts
+	hlrz t,2(b)		;count from first
+	hlrz a,2(c)		;count from second
+	camge t,a
+	jrst less		;less
+	camle t,a
+	jrst great		;greater
+
+;first two words
+ife KACPU,<
+	dmove d,(b)		;now the values
+>
+ifn KACPU,<
+	move d,(b)
+	move e,1(b)
+>
+	camge d,(c)
+	jrst less
+	camle d,(c)
+	jrst great
+	camge e,1(c)
+	jrst less
+	camle e,1(c)
+	jrst great
+	caig t,^D10		;more data?
+	popj p,			;no - done
+
+;other words - char count is in T, pointers in B,C
+	hrrz b,2(b)
+	hrrz c,2(c)
+	subi t,^D10
+
+ccoml:	move d,(b)
+	camge d,(c)
+	jrst less
+	camle d,(c)
+	jrst great
+	subi t,5
+	addi b,1
+	addi c,1
+	jumpg t,ccoml
+	popj p,
+
+less:	sos 1(p)
+	popj p,
+
+great:	aos 1(p)
+	popj p,
+
+
+
+;IDCOMP(CTP,LEN,ID,IDEXT) - CTP with global
+;	b    c   d&e   f   g - free
+idcomp:	setzm 1(p)		;assume equal
+
+;counts
+	hlrz t,2(b)		;count from first
+	camge t,c
+	jrst less		;less
+	camle t,c
+	jrst great		;greater
+
+;first two words
+	camle d,(b)
+	jrst less
+	camge d,(b)
+	jrst great
+	camle e,1(b)
+	jrst less
+	camge e,1(b)
+	jrst great
+	caig t,^D10		;more data?
+	popj p,			;no - done
+
+;other words - char count is in T, pointers in B,F
+	hrrz b,2(b)
+	subi t,^D10
+
+icoml:	move d,(b)
+	camge d,(f)
+	jrst less
+	camle d,(f)
+	jrst great
+	subi t,5
+	addi b,1
+	addi f,1
+	jumpg t,icoml
+	popj p,
+
+
+	end

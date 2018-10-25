@@ -1,0 +1,1021 @@
+
+	UNIVERSAL USEDEF
+
+comment %
+
+		HEAP MANAGER
+
+these functions ar based on an algorythm described by Knuth in
+	"The Art of Computer Programming"
+
+Original work done by Shel Kaphan (SK@SAIL) ca. 1978
+
+Revamped and augmented by Dave Dyer (DDYER@ISIB) ca. 1979.
+Adapted for PASCAL usage by Dave Dyer, ca. 1980.
+
+Extended addressing version, Norm Samuelson, 1981, and Charles Hedrick, 1982.
+%
+;assumptions made by the Pascal compiler for Pascal use:
+;  args:
+;    NEW
+;	size of block in 2
+;    DISPOSE
+;	pointer in 2
+;	size of block in 3
+;  sideeffects:
+;    AC's 0 to 6 are assumed free for use by NEW and DISPOSE.  No others
+;	are used.  Note that the compiler will save AC's 2 to 6 if they
+;	are active, and will recompute 1 (the display pointer) if it is needed
+;    in the single section version,
+;	any memory needed is gotten from the Pascal heap, via GETNEW or GETSC.
+;	currently there is no way to return memory to the heap
+;    in the extended address version,
+;	the heap is many sections long, allocated permanently to this routine
+
+; parameters, program begins on next page
+define params,<
+.twseg==:1		; set =0 for oneseg version
+search pasunv
+.sat==:00		; 1= stand alone test version
+			; -1 for quiet test
+ifn tops10,<opsys==:-1>
+ife tops10,<
+	ifn tenex,<opsys==:0>
+	ife tenex,<opsys==:1>
+> ;ife tops10
+			; -1= tops10 version
+			; 0 = tenex
+			; 1 = tops20
+
+bakwd==:1		; 1= allocate from top down, 0=bottom up
+			;with bakwd on, uses GETNEW in PASIO, with it off,
+			;conventional allocation at .JBFF.
+xsize==:1		; 1= insist on allocating EXACT size requested.
+			; 0= otherwise, can be a few words bigger.
+			; and therefore doesn't check size of returned objects.
+nil=0			; representation of NIL
+pagsiz=777		;should use 1777 for tops10&kacpu, since that uses K
+			; instead of pages.  However since they also don't do
+			; auto-expansion but allocate in a fixed space, I
+			; want to minimize the use of their space.
+.clear==:0		;if nonzero, clear the area
+>
+params
+
+
+ifn %PASXT,<
+	ln$max==37,,777777
+	hd.siz==0
+	hd.nxt==1
+	hd.bak==2
+>;ifn %PASXT
+ife %PASXT,<
+	ln$max==377777
+	hd.siz==0
+	hd.nxt==0
+	hd.bak==1
+>;ife %PASXT
+	ln$hdr==hd.bak+1
+comment *
+
+ subtoutines use ac 17 as a stack
+   take arguments in ac1 ac2 ..
+   return values in  ac1 ac2 ..
+do NOT modify any ac that is not a returned value
+
+*
+
+
+if1,<
+ifn .sat, <PRINTX STAND ALONE TEST version>
+ifl opsys,<printx Tops-10 version>
+ife opsys,<printx TENEX version>
+ifg opsys,<printx Tops-20 version>
+ifn pagsiz-777,<printx Non-standard page size>
+ifn bakwd,<printx BACKWARD version>
+>;if1
+
+ifn .twseg,<		;macros for oneseg version
+ if1,<printx TWOSEG version>
+define ini(a,b),<
+	title A B
+params
+ife opsys,<	search stenex>
+ifg opsys,<	search monsym>
+ifn .twseg,<
+	twoseg	400000
+	..loc==:1
+>
+ife .twseg,<..loc==:0>
+	pure
+entry	a
+a::>
+
+define pure,<
+ife ..loc,<	reloc>
+>
+define impure,<
+ifn ..loc,<	reloc>
+>
+>
+ife .twseg,<		;macros for twoseg version
+ if1,<printx ONESEG version>
+define ini,<
+	..loc==:0
+>
+define pure<>
+define impure<>
+>
+
+define typ(msg),<
+ifge opsys,<
+	hrroi	1,msg
+	psout%
+>
+ifl opsys,<
+	outstr	msg
+>
+>
+define typc(chr),<
+ifl opsys,<
+	outchr	chr
+>
+ifge opsys,<
+	move	1,chr
+	pbout
+>
+>
+define error(msg),<
+ifl opsys,<
+	OUTSTR	[ASCIZ/?
+? MSG
+/]
+ifn .sat,<
+	EXIT	1,
+	POPJ	P,
+> ;ifn .sat
+ife .sat,<
+	MOVE	0,-1(P)	;get return pc
+	PUSHJ	P,RUNER.##
+> ;ife .sat
+> ;ifl opsys
+
+ifge OPSYS,<
+ifn .sat,<	PUSH	P,1>
+	HRROI	1,[ASCIZ/?
+? MSG
+/]
+	PSOUT%
+ifn .sat,<
+	HALTF
+	POP	P,1
+	POPJ	P,
+> ;ifn .sat
+ife .sat,<
+	MOVE	0,-1(P)		;get return pc
+	PUSHJ	P,RUNER.##
+> ;ife .sat
+> ;ifge opsys
+> ;define error
+
+	prgend;
+	SEARCH	USEDEF, MACSYM, PASUNV
+INI	HEAP,<nontrivial heap allocator>
+	.xtend			;declare (non)extended
+
+	entry	casize, cainit, dispos, dispf., xnew.
+	intern	new, ca.nit	;not entry, to allow loading GETNEW instead
+ifn %PASXT,<extern	getsc., sn.hep>
+ife %PASXT,<extern	sysrel, sysff, .alcor>
+ife .sat,<extern	dispc.>
+
+COMMENT \
+
+ENTRY POINTS
+
+NEW		call to get a block
+		MOVEI	B,SIZE
+		PUSHJ	P,NEW
+		RETURN HERE
+		  B=BLOCK, RPART of -1 and N+1 available
+DISPOS		call to release a block
+		MOVE	B,ADDR
+		MOVE	C,SIZE	[or zero]
+		PUSHJ	P,DISPOS
+		RETURN HERE
+CAINIT		call to initialize (once only)
+		RETURN HERE, AC 1 2 3 4 used
+CASIZE		call to verify ca data base,
+		return USED,,FREE
+
+ALL with return on success, or trap to pascal if an error is detected.
+
+standard boundary tag heap allocation.
+unallocated blocks kept in doubly linked lists.
+two words overhead per area
+
+ifn %PASXT,<
+free storage list looks like
+word 0:		[tag bit][size of block]
+word 1:		[link to next block]
+word 2:		[link to previous block]
+.
+.
+.
+word N-1:	[tag bit][size=N]
+>;ifn %PASXT
+
+ife %PASXT,<
+free storage list looks like
+word 0:		[tag bit][size of block],,[link to next block]
+word 1:					  [link to previous block]
+.
+.
+.
+word N-1:	[tag bit][size=N]	,,0
+>;ife %PASXT
+
+when block adjacent to a free area is released, the free area is
+unlinked from the avail list temporarily, merged with the newly
+released area, and then the whole block is put onto the free list.
+\;end comment
+subttl	dispos
+;
+; call with pointer in B
+;
+
+dispf.::		;special entry for records with files in them
+ife .sat,<pushj p,dispc.>
+	;jrst dispos	;fall into regular dispose
+
+DISPOS::
+ifn .sat,<
+	PUSH	P,C
+	PUSH	P,D
+	PUSH	P,E
+>
+ifn xsize,<MOVE	D,C>		; get (optional) size
+ifn %PASXT,<tlz	b,770000>	; get address part only
+ife %PASXT,<tlz	b,-1>
+	CAIN	B,NIL		; trying to release nil?
+	 PUSHJ	P,RLSBXR
+ifg <hd.nxt>,<SUBI B,HD.NXT>	; point to start of header
+	SOSG	C,B		; jump if zero being disposed.
+	 PUSHJ	P,RLSBXR
+
+; some consistancy checking
+	SKIPL	E,(C)		;get size of block
+	 PUSHJ	P,RLSDED	;already killed!
+ife %PASXT,<HLRZ E,(C)>		; get size of block
+	ANDX	E,LN$MAX	;get size
+	CAIG	E,LN$HDR	;must be at least this big to be real
+	 PUSHJ	P,RLSDED	;so spread the bad news
+ifn xsize,<
+	JUMPE	D,RLSC1		;jump if he didn't claim to know then size
+	ADDI	D,LN$HDR	;add header
+	CAME	D,E		;is he as smart as he thought?
+	 PUSHJ	P,RLSDED	;no.
+>;ifn xsize
+RLSC1:	ADD	E,C		;ptr to next block
+	MOVE	D,-1(E)		;get end tag
+ifn %PASXT,<CAME D,(C)>		;compare with begin tag
+ife %PASXT,<
+	XOR	D,(C)		;compare with begin tag
+	TLNE	D,-1		;must match
+>;ife %PASXT
+	 PUSHJ	P,RLSDED	;BAD NEWS!
+	came	c,begmem	;is this the low end of memory?
+	SKIPGE	D,-1(C)		;previous block free?
+	 JRST	RLSB3		;no, don't merge to this block.
+
+	MOVE	B,C		;get ptr to current block in B
+ife %PASXT,<HLRZ D,-1(C)>	;get size of previous block (already in D for %PASXT)
+	SUB	B,D		;get ptr to start of previous block
+	PUSHJ	P,UNLINK	;unlink previous area from avail list
+ifn %PASXT,<
+	MOVE	C,HD.SIZ(C)	;get size of current block
+	ADDM	C,HD.SIZ(B)	;add to size of previous block
+>;ifn %PASXT
+ife %PASXT,<
+	HLRZ	C,HD.SIZ(C)	;get size of current block
+	HLRZ	D,HD.SIZ(B)	;get size of previous in D
+	ADD	C,D
+	HRLM	C,HD.SIZ(B)	;add to size of previous block
+>;ife %PASXT
+	MOVE	C,B		;move pointer to previous block
+RLSB3:	MOVE	B,E		;pointer to next block
+	camge	e,endmem	;is this the high end of memory?
+	SKIPGE	D,HD.SIZ(E)	;free?
+	 JRST	RLSB5		;no, don't merge next
+	PUSHJ	P,UNLINK	;unlink next area
+ifn %PASXT,<
+				;size of next is already in D
+	ADD	B,D		;first element after merged block
+	ADD	D,HD.SIZ(C)	;sum = size of merged block
+	ANDX	D,LN$MAX	;throw out tag bit (or else!)
+	MOVEM	D,HD.SIZ(C)	;deposit into size of first
+>;ifn %PASXT
+ife %PASXT,<
+	HLRZ	D,HD.SIZ(B)	;get size of next
+	ADD	B,D		;first element after merged block
+	HLRZ	E,HD.SIZ(C)	;size of current
+	ADD	D,E		;sum = size of merged block
+	ANDX	E,LN$MAX	;throw out tag bit (or else!)
+	HRLM	D,HD.SIZ(C)	;deposit into size of first
+>;ife %PASXT
+
+RLSB5:	;B=LAST+1, C=FIRST-1
+	MOVE	E,HD.SIZ(C)	;total size of block to be released.
+	TLZ	E,(1B0)		;make sure tag bit off
+ife %PASXT,<TRZ  E,-1>
+	MOVEM	E,HD.SIZ(C)	;put size, tag in first word
+	MOVEM	E,-1(B)		;put size, tag in last word
+
+
+ifn %PASXT,<
+;this code (hopefully) links the new block to the HEAD of the list
+;(so we will tend to re-use blocks, rather than fragmenting the big heap)
+	MOVE	E,AVAIL+HD.NXT	;FORWARD link of avail list
+	MOVEM	E,HD.NXT(C)	;FORWARD link new block to previous end
+	MOVEM	C,HD.BAK(E)	;BACK link old end of list to block
+
+	XMOVEI	E,AVAIL
+	MOVEM	E,HD.BAK(C)	;BACK link block to avail list head
+	MOVEM	C,AVAIL+HD.NXT	;FORWARD link list head to current block
+>;ifn %PASXT
+ife %PASXT,<
+;this code (hopefully) links the new block to the END of the list
+	HRRZ	E,AVAIL+HD.BAK	;get back link of avail list
+	HRRM	E,HD.BAK(C)	;back link new block to previous end
+	HRRM	C,HD.NXT(E)	;forward link old end of list to block
+
+	MOVEI	E,AVAIL
+	HRRM	E,HD.NXT(C)	;forward link block to avail list head
+	HRRM	C,AVAIL+HD.BAK	;back link list head to current block
+>;ife %PASXT
+	SETZ	B,
+POPJX:
+ifn .sat,<
+	POP	P,E
+	POP	P,D
+	POP	P,C
+>
+	POPJ	P,
+
+RLSDED:	ERROR	<DISPOSE called with clobbered or already-disposed object>
+	POPJ	P,	;if he continues, ignore error
+
+RLSBXR:	ERROR	<DISPOSE called with zero or NIL poiniter>
+	POP	P,(P)	;if he continues, exit dispose
+	JRST	POPJX
+subttl	NEW
+;
+; allocate a block of heap.
+;
+XNEW.::		;entry for sharable segment
+NEW::
+ifn .sat,<
+	PUSH	P,C
+	PUSH	P,D
+	PUSH	P,E
+	PUSH	P,F
+	PUSH	P,B		;preserve size over call to cainit
+	SKIPN	BEGMEM		;init memory if not done yet
+	 PUSHJ	P,CAINIT
+	POP	P,B
+>
+	SKIPG	C,B
+	 PUSHJ	P,GETBXR
+	ADDI	C,LN$HDR	;add overhead
+GETRTY:	XMOVEI	D,AVAIL		;get available list header
+	MOVE	B,D
+
+;Look for an available block at least big enough for the
+;desired block including overhead.
+
+GETBF0:
+ifn %PASXT,<MOVE  B,HD.NXT(B)>	;get next entry on list
+ife %PASXT,<HRRZ  B,HD.NXT(B)>
+	CAMN	B,D		;back to avail?
+	 JRST	GETEXP		;yes, must try to expand the heap
+ifn %PASXT,<MOVE  E,HD.SIZ(B)>	;get size of this element
+ife %PASXT,<HLRZ  E,HD.SIZ(B)>	;get size of this element
+	CAMG	C,E		;area big enough?
+	 JRST	GETBF1		;yes, allocate out of it
+	JRST	GETBF0		;if not, keep trying.
+
+GETEXP:	PUSH	P,C		;save the size wanted
+ifn %PASXT,<
+	movei	b,1		;get one more section
+	sos	c,sn.hep
+	call	getsc.		;allocate a section
+	move	a,b
+	add	a,[1,,0]	;end of section+1
+	came	a,begmem	;skip of connected to previous heap
+	 call	splits		;we have to do the splits
+	movem	b,begmem	;remember the heap is bigger
+	movx	c,<1B0!1B17>	;size of one section
+	movem	c,hd.siz(b)	;make it look right!
+	movem	c,-1(a)
+	addi	b,hd.bak	;fixup arg for DISPOS
+	movx	c,<1b17-ln$hdr>
+	call	dispos		;add this section to the avail list
+	jrst	expdon		;expansion all done
+
+splits:	tmsg	<
+%The heap has been fragmented, probably by a user call to GETSECtions
+No code exists to handle that yet.  Sorry.  You can avoid this problem
+by asking for your sections at the LOW end of memory, starting with section 3>
+	jrst	endl##
+
+>;ifn %PASXT
+ife %PASXT,<
+	MOVE	B,C		;try memory expansion
+IFE BAKWD,<MOVE	C,ENDMEM>
+IFN BAKWD,<MOVE	C,BEGMEM>
+	MOVEM	C,SYSFF
+	PUSHJ	P,RECALC	;re init for expanded memory
+>;ife %PASXT
+EXPDON:	POP	P,C
+	JRST	GETRTY
+
+GETBF1:	;B points to block we are allocating out of
+	;C is size of words+header to allocate
+	;D is codsec,,AVAIL
+	;E is size of current block	
+
+ifn %PASXT,<
+	MOVE	F,C		;at least 3 words extra?
+	ADDI	F,LN$HDR+1
+	CAMG	E,F
+>;ifn %PASXT
+ife %PASXT,<
+	CAIG	E,LN$HDR+1(C)	;at least 3 words extra?
+>;ife %PASXT
+	 JRST	GETBF2		;no
+				; Actually, this could be -2(E)
+				; but the result would be to leave a 2
+				; word block that could never be allocated,
+				; and would clutter up the free list until
+				; one of the adjacent blocks was freed.
+
+;The block just found is bigger than needed.  We will split it into
+;two blocks.  Note there is a SIGNIFICANT difference between the
+;extended and non-extended versions below.  In the non-extended
+;version the low part of the big block is allocated and the high
+;part is kept on the free list.  In the extended version, the high
+;part is allocated and the low part left.  This is due to the fact
+;that on non-extended systems the heap grows up, while in the
+;extended version it is all allocated initially and grows down.
+
+ifn %PASXT,<
+	SUB	E,C		;find size of new free block
+	MOVEM	E,HD.SIZ(B)	;store size of new free block
+	ADD	B,E		;ptr to new  block (high part)
+	MOVEM	E,-1(B)		;store size in last word of free block
+;note we dont have to relink the new free block, since it is already
+;in the free list.  This sure is simple.  Now B points to the
+;new block to allocate, and C contains its length.
+>;ifn %PASXT
+ife %PASXT,<
+	MOVE	F,E		;get size of old free block
+	ADD	F,B		;get last word of free block	
+
+	MOVEI	D,(C)		;get size
+	ADD	D,B		;ptr to new free block
+	SUB	E,C		;find size of new free block
+
+	HRLM	E,(D)		;store size of new free block
+	HRLM	E,-1(F)		;update size in last word of free block
+	HRRZ	E,HD.BAK(B)	;find old backlink
+	HRRM	E,HD.BAK(D)	;backlink new area to previous
+	HRRM	D,HD.NXT(E)	;also store forward link in previous
+
+	HRRZ	E,HD.NXT(B)	;find old forward link
+	HRRM	E,HD.NXT(D)	;deposit it in new area
+	HRRM	D,HD.BAK(E)	;update backlink in next
+
+	MOVEI	E,-1(B)		;get size of current block-1
+	ADD	E,C		;find last location
+
+	IORI	C,400000
+	HRLZM	C,(B)
+	HRLZM	C,(E)		;store tag,size in 1st, last words.
+>;ife %PASXT
+	JRST	GETBF3
+
+;gets here if whole free block was allocated.
+;e = size of total free block when coming in here.
+
+GETBF2:
+ifn XSIZE,<
+	CAME	E,C		;was it an exact match?
+	 JRST	GETBF0		;no.  Because we allow the size returned to
+				;be specified, we have to try something
+				;different.  Otherwise, someone will eventually
+				;complain because the object is a different
+				;size than was asked for.
+>
+	PUSHJ	P,UNLINK
+
+GETBF3:	; B = adress of allocated area's header word
+	;for extended code, C = length of new block
+
+ifn %PASXT,<
+	MOVE	E,B		;E - end of current block
+	ADD	E,C
+	MOVE	D,(P)		;get callers address
+	MOVEM	D,HD.NXT(B)	;store it in the forward pointer for debugging
+	TXO	C,<1B0>		;set allocated bit
+	MOVEM	C,HD.SIZ(B)	;put it in header
+	MOVEM	C,-1(E)		;and trailer
+	XMOVEI	B,HD.BAK(B)	;return first available word
+ifn .clear,<
+	TXZ	C,<1B0>		;get back pure length
+	XMOVEI	D,HD.NXT(B)
+	XMOVEI	E,1(D)
+	SETZM	(D)
+	SUBI	C,LN$HDR-1
+	SKIPLE	C		;skip if one word data area
+	 EXTEND	C,[XBLT]	;clear allocated area
+>;ifn .clear
+>;ifn %PASXT
+ife %PASXT,<
+	HLRZ	D,(B)		;actual size of area
+	ANDI	D,377777	;clear allocated bit (paranoia)
+	MOVEI	C,400000(D)	;get length+"allocated" bit
+	ADDI	D,-2(B)		;last word to clear
+	HRLZM	C,(B)		;clear forward ptr, and set length+allocated
+	HRLZM	C,1(D)		;clear tail pointer, and set length+allocated
+	XMOVEI	B,1(B)		;return first available word
+ifn .clear,<
+	SETZM	(B)		;clear allocated area
+	CAIL	B,(D)		;was it exaactly 1 word?
+	 JRST	POPJFX
+	MOVEI	C,1(B)
+	HRLI	C,(B)
+	BLT	C,(D)
+>;ifn .clear
+>;ife %PASXT
+POPJFX:
+ifn .sat,<
+	POP	P,F
+	JRST	POPJX
+>;ifn .sat
+	POPJ	P,
+
+GETBXR:	ERROR	<NEW called for Zero size!>
+	MOVEI	B,NIL		;if continued, return NIL
+	JRST	POPJFX
+	
+
+; subroutine to unlink block addressed by B from free list
+; called with PUSHJ P,UNLINK
+
+UNLINK:	PUSH	P,E
+	PUSH	P,D
+ifn %PASXT,<
+	MOVE	E,HD.NXT(B)	;get ptr to next
+	MOVE	D,HD.BAK(B)	;get ptr to previous
+	MOVEM	D,HD.BAK(E)	;unlink from next
+	MOVEM	E,HD.NXT(D)	;unlink from previous
+>;ifn %PASXT
+ife %PASXT,<
+	HRRZ	E,HD.NXT(B)	;get ptr to next
+	HRRZ	D,HD.BAK(B)	;get ptr to previous
+	HRRM	D,HD.BAK(E)	;unlink from next
+	HRRM	E,HD.NXT(D)	;unlink from previous
+>;ife %PASXT
+	POP	P,D
+	POP	P,E
+	POPJ	P,
+subttl CAINIT
+
+CA.NIT::
+CAINIT::
+ifn %PASXT,<
+	movei	b,3		;make AVAIL look like a block of minimal length
+	movem	b,avail+hd.siz
+	xmovei	b,avail
+	hrlo	c,sn.hep	;last word of heap section
+	aos	c
+	movem	c,endmem	;store as end of memory
+	hrlz	c,sn.hep	;first word of that section
+	movem	c,begmem	;store as beginning of memory
+	movem	b,hd.nxt(c)	;link them together...
+	movem	b,hd.bak(c)
+	movem	c,avail+hd.nxt
+	movem	c,avail+hd.bak
+	movsi	b,1		;# words in one section
+	movem	b,hd.siz(c)	;store size
+	move	c,endmem
+	movem	b,-1(c)
+>;ifn %PASXT
+ife %PASXT,<
+	MOVEI	B,3
+	MOVEI	B,AVAIL
+	MOVEM	B,(B)
+	MOVEM	B,1(B)		;init free list
+
+	MOVEI	B,3
+	PUSHJ	P,.ALCOR
+	MOVSI	C,400003
+	MOVEM	C,(B)
+	MOVEM	C,2(B)
+IFN BAKWD,<
+	; create an endmem and a BEGMEM block
+	MOVEM	B,ENDMEM
+	MOVEI	B,3
+	PUSHJ	P,.ALCOR
+	MOVSI	C,400003
+	MOVEM	C,(B)
+	MOVEM	C,2(B)
+	MOVEM	B,SYSFF
+>
+	MOVEM	B,BEGMEM	;beginning of memory block
+	SETZ	B,
+; enter here when heap expands
+RECALC:
+IFN BAKWD,<
+	; allocate as much as required plus the rest of the page
+	MOVE	C,SYSFF
+	SUBM	C,B
+	TRZ	B,PAGSIZ	;back up to top of page
+	SUB	B,SYSFF		;ask for this much..
+	MOVN	B,B
+	CAIGE	B,6		;but at least enough for two blocks
+	ADDI	B,PAGSIZ+1	;so add a page if we wanted too little
+
+	PUSH	P,B
+	PUSHJ	P,.ALCOR	;go getum
+	HRLZI	C,400003	;mark as used
+	MOVEM	C,(B)
+	MOVEM	C,2(B)		;at both ends
+	POP	P,C
+	; mark the rest of the block and the old BEGMEM block
+	IORI	C,400000
+	MOVSM	C,3(B)
+	MOVEM	B,BEGMEM
+	ADDI	B,-400000(C)
+	MOVSM	C,2(B)
+	MOVE	B,BEGMEM
+	ADDI	B,4
+ifn XSIZE,<
+	SETZ	C,
+>
+	JRST	DISPOS
+>
+IFE BAKWD,<
+	HRRZ	C,SYSFF
+	ADD	B,C		;proposed new size
+	TRO	B,PAGSIZ	;round up to next page top
+	SUBI	B,-1(C)		;B= size available without expansion
+	CAIGE	B,6		;must be room for 2 blocks
+	ADDI	B,PAGSIZ+1
+	PUSHJ	P,.ALCOR	;make sure enough heap
+
+	MOVE	C,SYSREL
+	MOVE	D,C
+	SUBI	C,2(B)		;size of block to free
+	IORI	C,400000	;mark as used
+	HRLZM	C,(B)
+	HRLZM	C,-3(D)		;at both ends
+	MOVEI	C,400003
+	HRLZM	C,(D)
+	HRLZM	C,-2(D)		;make an end of memory block
+	SUBI	D,2
+	MOVEM	D,ENDMEM
+	MOVEI	B,1(B)
+ifn XSIZE,<
+	SETZ	C,
+>
+	JRST	DISPOS	;release the free space
+>
+>;ife %PASXT
+subttl	CASIZE
+
+CASIZE::; verify correctness of data base
+	; calculate size of free space
+	SKIPN	BEGMEM
+	 PUSHJ	P,CAINIT
+ifn .sat,<
+	PUSH	P,C
+	PUSH	P,D
+>
+	MOVE	D,BEGMEM
+	SETZM	N.FREE		;clear the counters
+ifn %PASXT,<SETZM  N.ALOC>
+ife %PASXT,<
+	MOVEI	B,3
+	MOVEM	B,N.ALOC
+>
+MEMLP:
+ifn %PASXT,<
+	MOVE	B,(D)		;get area size
+	MOVE	C,B
+	TXZ	B,<1B0>		;clear tag
+>;ifn %PASXT	
+ife %PASXT,<
+	HLRZ	B,(D)		;get area size
+	MOVE	C,B
+	TRZ	B,400000	;clear tag
+>;ife %PASXT
+	ADD	B,D		;beginning of next area
+		; D= begin this area, B=begin next area
+	CAMLE	B,ENDMEM
+	 PUSHJ	P,BADCOR		;oops!
+ifn %PASXT,<
+	CAME	C,-1(B)		;end tag should match start
+	 PUSHJ	P,BADCOR
+	TLNN	C,(1B0)		;skip if in use
+	 ADDM	C,N.FREE
+	TLZE	C,(1B0)		;skip if free
+	 ADDM	C,N.ALOC	
+>;ifn %PASXT
+ife %PASXT,<
+	TSC	C,-1(B)		;prev tag should match
+	TRNE	C,-1
+	 PUSHJ	P,BADCOR
+	HLRZ	C,(D)
+	TRZE	C,400000	;skip if free
+	 JRST	ACCUM
+FREBL:	SKIPL	(B)		;next better be allocated
+	 PUSHJ	P,BADCMP
+	ADDM	C,N.FREE
+	CAIA
+ACCUM:	ADDM	C,N.ALOC	;accumulate size
+>;ife %PASXT
+	MOVE	D,B		;step to the next area
+	CAMGE	D,ENDMEM
+	 JRST	MEMLP
+	MOVE	B,N.FREE	;return #words free ONLY
+RETX:
+ifn .sat,<
+	POP	P,D
+	POP	P,C
+>
+	MOVEM	B,1(P)		;return value
+	POPJ	P,
+
+BADCMP:	ERROR	<free list not compact>
+	MOVEI	B,0		;if continued, return 0
+	JRST	RETX
+
+BADCOR:	ERROR	<heap is messed up>
+	MOVEI	B,0		;if continued, return 0
+	JRST	RETX
+	
+	IMPURE
+
+AVAIL:	BLOCK	3	;pointer to free heap, inited by CAINIT
+BEGMEM:	BLOCK	1	;begin of memory area, always marked allocated
+ENDMEM:	BLOCK	1	;start of memory area, always marked allocated
+N.FREE:	BLOCK	1
+N.ALOC:	BLOCK	1
+;;;hepmap:	block	<sn%max/^D36>+1
+
+	PURE
+	PRGEND
+
+
+;
+;TEST PROGRAM FOR HEAP PACKAGE
+;
+	search	usedef
+	sall			;suppress macro expansions
+	.direc	sfcond		; and failing conditionals
+	.direc	flblst		; and multi-line binary
+
+ifn .sat,<
+ini cortst,<test program for the heap manager>
+	.request useful
+start:	move	p,[iowd 100,stack]
+	setzm	allocs
+	pushj	p,CAINIT##
+
+tlp:
+ifg .sat,<
+	typ	<[ASCIZ/	/]>
+>
+	pushj	p,casize##
+ifg .sat,<
+	pushj	p,typoct
+	typ	<[Asciz/
+/]>
+>
+tlpd:	pushj	p,random
+	idivi	B,^D100
+	jumpl	B,FREEIT
+ifg .sat,<
+	typ	<[asciz/alloc	/]>
+>
+	movm	b,c
+	addi	b,1
+ifg .sat,<
+	pushj	p,typoct
+>
+	PUSH	P,B
+	PUSHJ	P,NEW##
+	POP	P,D		;size
+	move	c,allocs
+	movem	c,(b)
+	HRLM	D,(B)
+	movem	B,allocs	
+ifg .sat,<
+	typ	<[asciz/	/]>
+	pushj	p,typoct
+>
+	jrst	tlp
+freeit:	move	b,allocs
+	jumpe	b,tlpd
+frel:	  hrrz	b,(B)
+	  skipn b
+	  move	b,allocs
+	  sojg	c,frel
+
+	hrrz	c,(B)
+	jumpe	c,lasfre
+	hrrz	d,(C)
+	hrrm	d,(B)
+frep:
+ifg .sat,<
+	typ	<[asciz/rels	/]>
+>
+	hlrz	b,-1(c)
+	trz	b,400000
+ifg .sat,<
+	pushj	p,typoct
+	typ	<[ASCIZ/	/]>
+>
+	move	b,c
+ifg .sat,<
+	pushj	p,typoct
+>
+REPEAT 0,<
+	hlrz	c,-1(b)
+	trz	c,400000
+	hrli	b,-2(c)
+>
+	HLRZ	C,(B)
+	pushj	p,DISPOS##
+	jrst	tlp
+lasfre:	move	c,allocs
+	hrrz	b,(C)
+	movem	b,allocs
+	jrst	frep
+
+	entry	typoct
+	entry	typdec
+
+typdec::push	p,[^D10]
+	jrst	typer
+typoct::push	p,[^D8]
+typer:	exch	d,(P)		;save P3, get radix
+	push	p,b
+	push	p,c
+	pushj	p,typsub
+	pop	p,c
+	pop	p,b
+	pop	p,d
+	popj	p,
+
+typsub:	lshc	b,-^D35
+	lsh	c,-1		;vacate sign bit
+	divi	b,(d)		;dividend in B, remainder in C
+	hrlm	c,(p)		;save digit
+	caie	b,0		;done?
+	pushj	p,typsub	;no, recurse
+	hlrz	b,(p)		;get digit
+	addi	b,"0"		;convert to ascii
+	typc	b		;type it
+	popj	p,		;return
+
+random:	move	b,rab
+	mul	b,rab2
+	addi	c,134
+	addi	b,1231
+	movem	c,rab2
+	movem	b,rab
+	rotc	b,17
+	xor	b,c
+	popj	p,
+
+rab:	123457
+rab2:	5421312
+allocs:	block 1
+stack:	block 	100
+	prgend	start>
+
+	SEARCH USEDEF
+INI	ALCOR,<trivial memory allocator>
+	sall			;suppress macro expansions
+	.direc	sfcond		; and failing conditionals
+	.direc	flblst		; and multi-line binary
+
+;  trivial core allocation
+;  B	=NUMBER OF WORDS
+;	B returned is pointer, memorty has been cleared
+
+
+ife .sat,<
+ife %PASXT,<
+	entry	.alcor
+
+.ALCOR::
+; get the memory from pascal, then set SYSREL and SYSFF appropriately
+IFE BAKWD,<PUSH	P,B>
+	PUSHJ	P,GETNEW##	;get it!
+	PUSH	P,B
+IFE BAKWD,<IORI	B,PAGSIZ>
+IFN BAKWD,<ANDCMI B,PAGSIZ>
+	MOVEM	B,SYSREL	;current page boundary
+IFE BAKWD,<
+	MOVE	B,(P)
+	ADD	B,-1(P)
+>;IFE BAKWD
+	MOVEM	B,SYSFF		;next location to use
+	POP	P,B
+	POPJ	P,
+>;ife %PASXT
+>;ife .sat
+
+ifn .sat,<
+	PUSH	P,B
+	PUSH	P,C
+IFE BAKWD,<
+	ADD	B,SYSFF
+	MOVE	C,SYSREL
+	CAIG	B,1(C)
+>;IFE BAKWD
+IFN BAKWD,<
+	SKIPN	C,SYSFF
+	  JRST	[MOVEI	C,400000
+		 MOVEM	C,SYSREL
+		 MOVEM  C,SYSFF
+		 JRST	.+1]
+	MOVN	B,B
+	ADD	B,SYSFF		;add to used location
+	CAML	B,SYSREL	;going below the boundary?
+>;IFN BAKWD
+	 JRST	RETJBF
+ifl opsys,<
+	CORE	B,
+	 JRST	CORERR
+>;ifl opsys
+ifge opsys,<
+ife bakwd,<CAILE B,777777>
+ifn bakwd,<CAIGE B,PAGSIZ>
+	 JRST	CORERR
+IFE BAKWD,<IORI	B,PAGSIZ>
+>;ifge opsys
+IFN BAKWD,<ANDCMI B,PAGSIZ>
+	MOVEM	B,SYSREL
+	MOVE	B,SYSFF
+IFE BAKWD,<ADD	B,-1(P)>
+IFN BAKWD,<SUB	B,-1(P)>
+RETJBF:	HRRZ	C,SYSFF
+IFN BAKWD,<
+	SETZM	(B)
+	SOSG	-1(P)		;one word?
+	MOVEM	B,-1(P)		;save
+	JRST	BLTDON
+	HRLI	B,1(B)
+	MOVSS	B
+	BLT	B,-1(C)	
+	MOVE	B,-1(P)
+>;IFN BAKWD
+IFE BAKWD,<
+	SETZM	(C)
+	SOSG	-1(P);one word?
+	JRST	BLTDON
+	HRLI	C,1(C)
+	MOVSS	C
+	BLT	C,-1(B)
+>;IFE BAKWD
+BLTDON:	; b = adress to return
+	POP	P,C
+	POP	P,(P)
+IFE BAKWD,<EXCH	B,SYSFF>
+IFN BAKWD,<MOVEM B,SYSFF>
+	POPJ	P,
+CORERR:	ERROR	<core expansion failed>
+	HALT	.
+>;IFN .SAT
+
+ENTRY SYSFF,SYSREL
+
+IFE BAKWD,<
+	SYSFF==.JBFF##
+	SYSREL==.JBREL##
+>
+IFN BAKWD,<
+	IMPURE
+SYSFF::	BLOCK	1
+SYSREL::BLOCK	1
+	PURE
+>
+	LIT
+	IMPURE
+	VAR
+	PURE
+	end;

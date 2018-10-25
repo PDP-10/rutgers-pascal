@@ -1,0 +1,418 @@
+	TITLE	PASDBG	*** DEBUG-SUPPORT ***
+	TWOSEG
+
+	;ENTRY POINTS
+
+	entry pasdd.,ddtdb.,ddtm1,ddtm2
+	entry magic,isDisk,debnam
+	entry getddt,setddt
+
+	;EXTERNAL REFERENCES
+ 
+	EXTERN	DEBUG, GETPG., NORCHT, PDDT., TTY, TTYOUT, IN.DDT
+	extern	getlnx
+
+	SEARCH	JOBDAT, PASUNV, MONSYM, MACSYM
+
+ifn klcpu,<EXTERN SN.COD>
+
+	SALL
+	.DIREC	SFCOND
+	.DIREC	FLBLST
+
+	;REGISTER DEFINITION
+
+	REGIN=A		;INITILISATION OF REGISTERSTACK
+	REG= B
+	REG1=C
+	REG2=D
+	REG3=E
+	BASIS=o
+	entptr=77
+
+	;CONSTANTS
+
+	debpgs=2	;number of pages for pasddt locals
+
+
+;START OF DEBUG-SUPPORT'S CODE
+;*****************************
+
+	RELOC 0
+
+;The following is ENTRY2 in DEBUG.  It used to be at 140 - 144.
+rgstrs:	block	1
+stoppy:	call	exdeb.
+ientpt:	block	1
+stkbot:	block	1
+status:	block	1		;type of break
+brkadr:	block	1		;the address of the breakpoint
+
+orig16:	block	1
+ddtini:	block	1		;non-zero if PASDDT is ready
+
+
+;The following will be STRING, STRINGTYPE and STRINGINDEX in
+;DEBUG.  They used to be generated using a NEW.
+str:	block 35	;"heap" storage for DEBUG
+strptr:	block 4
+stridx:	block 5
+
+a.xrir:	3			;arg block for xrir% calls
+	block	2
+
+debpc:	block	1	;will get address where PC is to be found at break
+
+ttybuf:	block ^D50	;temporary tty buffer for debugger
+
+	RELOC 400000
+
+;*** INITDEBUG: TEST ON 'NONSHARABLE', CORE-EXPANSION, DEBUG***
+
+indeb.::movem	basis,rgstrs+3	;save bottom of stack
+ifn klcpu,<skipn b,sn.cod>	;skip if extended addressing
+	 hrrzm	basis,rgstrs+3	;sec 0, save only right half
+;note - SETDDT uses B set up above
+	move	c,entptr	;copy data from link chain to where we need it
+	movem	c,ientpt
+	clear	c,		;setup PDDT. as JFCL initially
+	call	setddt
+	movei 	a,debpgs	;number of pages for locals
+	call	getpg.		;get pages
+	tlz	a,-1		;get page #
+	lsh	a,9		;make address
+	movem	a,rgstrs	;start of core block is our new start
+	call	saverg		;SAVE REGISTERS
+	movei	a,.fhslf	;get address of channel table
+  ;this code sets up ^D interrupt if SIR was done.  This is only possible
+  ; if not extended mode.
+	rir%			;first try non-extended
+	 erjmp	indeb1		;failed, now try extended
+	hlrz	a,2		;get levtab
+	move	a,(a)		;first entry is level 1
+	movem	a,debpc		;that is where PC will be found in interrupt
+	tlz	2,777777	;2 - chntab
+	move	a,[xwd 1,debint];set up ^D intercept
+	movem	a,^D35(2)   	;as channel 35
+	jrst	indeb2		;it is done
+
+  ;here if RIR failed. presumably XRIR was done
+indeb1:	movei	2,a.xrir
+	xrir%
+	move	a,a.xrir+.silvt	;get address of level table
+	move	a,(a)		;old pc address for level 1
+	xmovei	a,1(a)		;pc is SECOND word now...
+	movem	a,debpc		;use that when we need the PC
+	move	2,a.xrir+.sicht	;get address of channel table
+	xmovei	a,debint	;set up ^D intercept
+	tlo	a,(1B5)
+	movem	a,^D35(2)   	;as channel 35
+
+  ;code for RIR and XRIR joins here
+indeb2:	movei	1,.fhslf	;turn on the channel
+	movei	2,1B35
+	aic%
+	move	1,[xwd .ticcd,^D35] ;and associate with ^D
+	ati%
+	move	1,(p)		;1 _ ret addr
+	hrrz	1,(1)		;1 _ jrst start
+	xmovei	1,(1)		;get full address
+	setzm	status		;status = 'init'
+	movem	1,brkadr	;address = PROG.BEGIN
+	setom	ddtini		;remember it is ready
+	CALL	DEBUG.
+	RET
+
+EXDEB.::CALL	SAVERG		;SAVE REGISTERS
+	MOVE	A,0(P)		;RH=RETURNADDR - this gets us next inst
+ifn klcpu,<
+	SKIPN	SN.COD		;in extended addressing, break is next
+> ;ifn klcpu
+	SUBI	A,1		;but elsewhere it is this, so get this
+	XMOVEI	A,(A)		;isolate address
+	MOVEM	A,BRKADR	;store the break address
+	MOVEI	A,1		;STATUS='STOP'
+	MOVEM	A,STATUS
+	CALL	DEBUG.
+	RET
+
+;the next three locations must stay together...
+DDTM2:	JRST	INDEB.		;another magic entry point - must be ddtdb.-2
+DDTM1:	JRST	ERRDB1		;THIS ENTRY MUST BE BEFORE DDTDB.
+PASDD.::
+DDTDB.::skipe	in.ddt		;already in PASDDT?
+	 jrst	ddtdbx		;try to continue it [probably won't work, tho]
+	skipn	ddtini		;skip if indeb. has been called
+	 jrst [	hrrz a,.jbsa	;just start program, it will get back to us
+		jrst (a)]
+	CALL	SAVERG		;SAVE REGISTERS
+	MOVEI	A,2		;STATUS='DDT'
+	MOVEM	A,STATUS
+	MOVE	A,.JBOPC	;RETURNADDR
+	XMOVEI	A,(A)
+	MOVEM	A,BRKADR
+	CALL	DEBUG.
+ddtdbx:	skipe	.jbopc		;if there is someplace to go
+	 jrstf	@.jbopc		;return
+	hrroi	a,[asciz /?No saved PC
+/]
+diemsg:	esout%
+die:	haltf%
+	hrroi	a,[asciz/?Cant continue/]
+	jrst	diemsg
+
+debint:	skipe	in.ddt
+	jrst	debexi		;exit if already in debugger
+	call	saverg		;save acs
+	movei	a,.fhslf	;get address of PSI tables
+	movei	2,a.xrir
+	move	a,@debpc	;get the old pc
+	xmovei	a,(a)		;clear flag bits if old form
+	movem	a,brkadr	;store in break address
+	movei	a,2		;status='DDT'
+	movem	a,status
+	call	debug.
+debexi:	debrk%			;return to program
+
+ERRDB1:				;RETURNADDR IN T EXPECTED
+	CALL	SAVERG		;SAVE REGISTERS
+	MOVE	A,@RGSTRS	;GET ARG - BREAK ADDRESS
+	XMOVEI	A,(A)		;CANT USE T AS INDEX...
+	MOVEM	A,BRKADR	;STORE BREAK ADDRESS
+	MOVEI	A,3		;STATUS='RUNTIME ERROR'
+	MOVEM	A,STATUS
+
+	CALL	DEBUG.
+	RET
+
+
+SAVERG:				;SAVE USER-REGISTERS
+ifn kacpu,<
+	MOVEM	T,@RGSTRS
+	MOVE	T,A
+	MOVE	A,RGSTRS
+	MOVEM	T,1(A)
+>;ifn kacpu
+ife kacpu,<
+	dmovem	t,@rgstrs
+	move	a,rgstrs
+ifn klcpu,<
+	skipe	sn.cod		;skip if NOT extended addressing
+	 jrst	[dmovem	b,b(a)	;use XBLT for extended addressing
+		movei	t,<20-d> ;# ACs left to save
+		xmovei	b,d(a)
+		move	a,[1,,4] ;global address of AC4
+		extend	t,[xblt]
+		ret]
+>;ifn klcpu
+>;ife kacpu
+	HRRI	T,2(A)
+	HRLI	T,2
+	BLT	T,P(A)
+	RET
+
+DEBUG.:	move	p,rgstrs	;get address of our memory
+	xmovei	p,20(p)		;ACs are saved in the first 20 words
+ifn klcpu,<skipn sn.cod>	;skip if extended addressing
+	 hrl	p,p		;no, so fix left half
+	push	p,fileol+tty	;save the state of tty i/o
+	push	p,filcmp+tty
+	push	p,filbix+tty
+	push	p,filbct+tty
+	push	p,filbpt+tty
+	push	p,filcht+tty
+	push	p,filgln+tty
+	push	p,filtst+tty
+	push	p,filcmp+ttyout
+	setom	in.ddt		;say we are now in debugger
+	setzm	filcmp+tty	;reinit tty
+	movei	a,1
+	movem	a,fileol+tty
+	xmovei	a,ttybuf
+	movem	a,filbix+tty
+	setzm	filbct+tty
+	move	a,[ifiw norcht(a)]
+	movem	a,filcht+tty
+	xmovei	a,getlnx	;use interactive I/O
+	movem	a,filgln+tty
+	movei	a,314157	;and make sure lazy I/O not in progress
+	movem	a,filtst+tty
+	setzm	filcmp+ttyout	;likewise ttyoutput
+	adjstk	p,8		;setup new stack
+	xmovei	basis,-1(p)	; and heap
+	xmovei	bix,-4(p)
+	xmovei	reg,rgstrs
+	xmovei	reg1,str
+	xmovei	reg2,strptr
+	xmovei	reg3,stridx
+	call	debug
+	adjstk	p,-8
+	pop	p,filcmp+ttyout
+	pop	p,filtst+tty
+	pop	p,filgln+tty
+	pop	p,filcht+tty
+	pop	p,filbpt+tty
+	pop	p,filbct+tty
+	pop	p,filbix+tty
+	pop	p,filcmp+tty
+	pop	p,fileol+tty
+	setzm	in.ddt		;we are no longer in the debugger
+ifn klcpu,<
+	skipn	sn.cod		;skip if NOT extended addressing
+	 jrst	[HRLZ	17,RGSTRS ;RESTORE USER-REGISTERS
+		BLT	17,17
+		RET]
+	movei	t,<20-4>	;# registers to BLT
+	move	c,rgstrs
+	xmovei	a,d(c)
+	move	b,[1,,d]	;global address of AC d
+	extend	t,[xblt]
+	dmove	t,(c)
+	dmove	b,b(c)
+	ret
+> ;ifn klcpu
+ife klcpu,<
+	HRLZ	17,RGSTRS ;RESTORE USER-REGISTERS
+	BLT	17,17
+	RET
+> ;ife klcpu
+
+;The following routine is called by idtree when it finds a
+;pushj p,0(1).  It restores the basis of the routine, backs
+;up before the pushj, and simulates the code that set ac 1.
+;This is the only way I can think of to get the address of
+;the routine that was called.
+
+magic::	move	reg1,basis	;reg1 _ debugger basis
+	move	basis,-1(reg)	;get basis of caller
+	hlr	basis,basis	;in both halves if section 0
+ifn klcpu,<
+	skipe	sn.cod		;except if extended
+	move	basis,-2(reg)	;it is in a different word
+> ;ifn klcpu
+	move	reg,(reg)	;address of pushj
+	subi	reg,2		;first candidate for start instr
+	xmovei	reg2,(reg)	;save - also is last instr to xct
+	ldb	1,[point 9,(reg),17] ;ac and index fields
+	caie	1,(z 1,(16))	;this is what we want as first inst
+	soja	reg,.-2
+magicl:	xct	(reg)		;found instruction
+	xmovei	reg,1(reg)	;next
+	camg	reg,reg2	;if not beyond last to do
+	 jrst	magicl		;then do it.
+	movem	1,1(p)		;they got result in 1
+	move	basis,reg1	;restore debugger basis
+	ret
+
+;b - FCB.  Note that the open may have failed.
+isdisk::setzm	1(p)		;assume the worst
+	skipe	fileof(reg)	;if open failed
+	 ret			;forget it
+	hrrz	a,filjfn(reg)	;else see what we have
+	dvchr%
+	ldb	a,[point 9,2,17] ;type code
+	caie	a,.dvnul	;nul: or dsk: is OK
+	cain	a,.dvdsk
+	aos	1(p)		;code = 0; disk - return true
+	ret
+
+debnam::RET			;used only on Tops-10
+
+;this routine checks for DDT at 770000 in section 0.
+;Note - in the future (rel5) it should map it into the current section,
+;but that is not possible in rel4, so we want to put it in section 0
+;and rely on the fact that SN%COD is mapped over section 0.
+
+;if it looks like it is loaded it goes there, otherwise it GETs UDDT
+;sets up the symbol table pointers, and goes there.
+;Note - this code was lifted from FORLIB, since it works!
+
+getddt::
+	MOVE	1,[.FHSLF,,770]	;[114] LOOK AT PAGE 770
+	RPACS%			;[114] GET PAGE ACCESS BITS
+	TXNN	2,PA%PEX	;[114] DOES PAGE 770 EXIST?
+	  JRST	MAPDDT		;[114] NO, GO MAP IN UDDT.EXE
+	MOVE	1,770000	;[114] GET DDT ENTRY VECTOR
+	CAMN	1,[JRST 770002]	;[114] IS IT REALLY DDT?
+	  JRST	GODDT		;[114] YES, JUMP TO IT
+
+MAPDDT:	MOVEI	1,.FHSLF	;[114] GET ENTRY VECTOR LOC
+	GEVEC%
+;;;	PUSH	P,2		;[114] SAVE SINCE GET WRECKS IT
+	move	bix,2
+	MOVX	1,GJ%SHT+GJ%OLD	;[114] SHORT FORM, FILE MUST EXIST
+	HRROI	2,[ASCIZ /SYS:UDDT.EXE/] ;[114] DDT
+	GTJFN%			;[114] FIND IT
+	  ERJMP ERR11		;[114] NOT THERE, CAN'T HELP
+	HRLI	1,.FHSLF	;[114] MAP INTO THIS FORK
+	GET			;[114] READ IN DDT
+	  ERJMP	ERR11		;[114] CAN'T
+	DMOVE	1,116		;[114] GET SYMBOL TABLE POINTERS
+	MOVEM	1,@770001	;[114] STORE FOR DDT
+	MOVEM	2,@770002
+;;;	POP	P,2		;[114] GET ENTRY VECTOR BACK
+	move	2,bix
+	MOVEI	1,.FHSLF	;[114] THIS FORK
+	SEVEC%			;[114] RESTORE ENTRY VECTOR
+
+GODDT:	skipn	ddtini		;is PASDDT ready?
+	 jrst	770000		;no, just enter DDT
+	TMSG	<Type PDDT<ESC>G to continue
+>
+	JRST	770000		;jump into DDT
+err11:	tmsg	<
+%Sorry, I cant seem to get DDT for you
+>
+	ret
+
+notini:	tmsg	<%PASDDT not initialized
+>
+	jrst	getddt
+
+PDDT::	skipn	ddtini		;is PASDDT ready?
+	 jrst	notini		;no
+ifn klcpu,<
+	SKIPE	SN.COD		;EXTENDED VERSION?
+	XJRSTF	[0
+		SN%COD,,PDDT.1]
+> ;ifn klcpu
+PDDT.1:	RET
+
+;this routine replaced the old UUO handler.  Rather than generate LUUOs
+;the compiler simply inserts XCT PDDT. for every line.  Then we modify
+;PDDT. to do what we want!.
+
+setddt::cail	c,0		;range check the argument
+	cail	c,ln$lst
+	 jrst	badset
+	skipn	b		;if extended addressing
+	troa	b,41		;not - use .JBUUO
+	xmovei	b,PDDT.		;yes - use PDDT.
+	move	a,pddtls(c)	;get the instruction we want
+	movem	a,(b)		;store it
+	caie	c,2		;is it level check?
+	 ret			;no
+	move	a,rgstrs	;get location of user ac's
+	move	a,basis(a)	;get current basis
+	movem	a,orig16	;store for checks
+	ret
+
+pddtls:	jfcl			;(0) - clear single step mode
+	call	exdeb.		;(1) - single step - break on every line
+	call	chk16.		;(2) - continue to end of procedure
+ln$lst==.-pddtls
+
+badset:	hrroi	a,[asciz/
+?Invalid argument to SETDDT/]
+	jrst	diemsg
+
+;This is a routine used as an LUUO handler when we want to break
+;after exiting the current procedure.  It uses 16(basis) as an
+;indication of the procedure depth.
+chk16.:	caml	16,orig16	;are we at same or higher level?
+	 ret			;yes, nothing to do
+	jrst	exdeb.		;no - do a break
+
+;***PLATZ FUER LITERALS ***
+	LIT
+	END

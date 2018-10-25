@@ -1,0 +1,162 @@
+***** CHANGE #1; page 1, line 1; page 1, line 1
+ ---------------------------------
+
+***** CHANGE #2; page 1, line 10; page 1, line 10
+(*&Nu   make non-reserved words upper case *)
+(*&Xu   make procedure names upper case *)
+(*&I2   indent 2 spaces per level *)
+(*&G2   indent contents of BEGIN/END 2 extra spaces *)
+
+%$V:001400000320B\
+ ---------------------------------
+(*&Nu   make non-reserved words upper case *)
+(*&Xu   make procedure names upper case *)
+(*&I2   indent 2 spaces per level *)
+(*&G2   indent contents of BEGIN/END 2 extra spaces *)
+
+%$V:001400000321B\
+
+***** CHANGE #3; page 1, line 80; page 1, line 80
+   !     REL  : RELATIVE             REL  : RELOCATION\
+
+{The edit history is now EDIT-HISTORY.TXT}
+
+const
+  HEADER = 'PASCAL %14(320)';
+ ---------------------------------
+   !     REL  : RELATIVE             REL  : RELOCATION\
+
+{The edit history is now EDIT-HISTORY.TXT}
+
+const
+  HEADER = 'PASCAL %14(321)';
+
+***** CHANGE #4; page 35, line 455; page 35, line 455
+				  begin
+				    LOADADDRESS;
+				    MACRO3(OP_ADDI,REGC,FILCMP)
+				  end;
+(* 320 - always need to check for 314157 *)
+			    {See if the file is open.  A magic value of 314157 is left in FILTST if so }
+			    MACRO4(OP_MOVE,TAC0,REGC,FILTST-FILCMP);
+ ---------------------------------
+				  begin
+				    LOADADDRESS;
+				    MACRO3(OP_ADDI,REGC,FILCMP)
+				  end;
+(* 320 - always need to check for 314157 *)
+(* 321 - use SETM, to allow indirection in non-zero sec *)
+			    {See if the file is open.  A magic value of 314157 is left in FILTST if so }
+			    MACRO4(OP_SETM,TAC0,REGC,FILTST-FILCMP);
+
+***** CHANGE #5; page 36, line 76; page 36, line 76
+			  GOTFILE := TRUE;
+			  FILETYPE := TYPTR;
+(* 320 - always check this *)
+			  if CHECK then
+			    begin
+			      MACRO4(OP_MOVE,TAC0,REGC,FILTST);  {File test word}
+ ---------------------------------
+			  GOTFILE := TRUE;
+			  FILETYPE := TYPTR;
+(* 320 - always check this *)
+			  if CHECK then
+			    begin
+(* 321 - use SETM, for non-zero sec *)
+			      MACRO4(OP_SETM,TAC0,REGC,FILTST); {File test word}
+
+***** CHANGE #6; page 36, line 126; page 36, line 125
+		      end;
+		  FILETYPE := IDTYPE;
+(* 320 - always check this *)
+		  if CHECK then
+		    begin
+		      MACRO4(OP_MOVE,TAC0,FILEREGC,FILTST);  {File test word}
+ ---------------------------------
+		      end;
+		  FILETYPE := IDTYPE;
+(* 320 - always check this *)
+		  if CHECK then
+		    begin
+(* 321 - use SETM, for non-zero sec *)
+		      MACRO4(OP_SETM,TAC0,FILEREGC,FILTST);  {File test word}
+
+***** CHANGE #7; page 36, line 219; page 36, line 217
+		  end;
+	    (* internal files *)
+(* 320 - always check this *)
+	    if TEST then
+	      begin
+		MACRO4(OP_MOVE,TAC0,REGC,FILTST);  {File test word}
+ ---------------------------------
+		  end;
+	    (* internal files *)
+(* 320 - always check this *)
+	    if TEST then
+	      begin
+(* 321 - SETM for non-zero section *)
+		MACRO4(OP_SETM,TAC0,REGC,FILTST);  {File test word}
+
+***** CHANGE #8; page 37, line 176; page 37, line 176
+		      (* don't validty check for DISMISS *)
+		  else
+(* 320 - always check this *)
+		    if LKEY <> 28 then
+		      begin
+			MACRO4(OP_MOVE,TAC0,REGIN+1,FILTST);{File test word}
+ ---------------------------------
+		      (* don't validty check for DISMISS *)
+		  else
+(* 320 - always check this *)
+		    if LKEY <> 28 then
+		      begin
+(* 321 - use SETM, for non-0 section *)
+			MACRO4(OP_SETM,TAC0,REGIN+1,FILTST);{File test word}
+
+***** CHANGE #9; page 38, line 30; page 38, line 30
+	    else begin BCT_LOC := FILBCT; BPT_LOC := FILBPT;
+		    LIM_LOC := FILBFH end;
+	    LREGC := REGC;  NOOFF := FALSE;  NOLIM:=FALSE;
+	    GETFN(FALSE);
+	    {If the file block is not legal yet, call routine to make it so}
+	    MACRO4(OP_MOVE,TAC0,REGC,FILTST);  {File test word}
+ ---------------------------------
+	    else begin BCT_LOC := FILBCT; BPT_LOC := FILBPT;
+		    LIM_LOC := FILBFH end;
+	    LREGC := REGC;  NOOFF := FALSE;  NOLIM:=FALSE;
+	    GETFN(FALSE);
+	    {If the file block is not legal yet, call routine to make it so}
+(* 321 - use SETM, for nonzero sections *)
+	    MACRO4(OP_SETM,TAC0,REGC,FILTST);  {File test word}
+
+***** CHANGE #10; page 40, line 23; page 40, line 23
+	procedure CLOSE;
+	  begin
+	    if (LKEY = 25) or (LKEY = 42) then
+	      GETFILENAME(OUTFILE,FALSE,THISFILE,GOTARG,FALSE)
+	    else
+	      GETFILENAME(INFILE,FALSE,THISFILE,GOTARG,FALSE);
+ ---------------------------------
+	procedure CLOSE;
+	  begin
+	    if (LKEY = 25) or (LKEY = 42) then
+	      GETFILENAME(OUTFILE,FALSE,THISFILE,GOTARG,FALSE)
+	    else
+	      GETFILENAME(INFILE,FALSE,THISFILE,GOTARG,TRUE);
+
+***** CHANGE #11; page 44, line 187; page 44, line 187
+			the AC use here is such that REGC is always above 2, so the only
+			reason for 2 not to be free is that realregc is using it.  This is
+			certainly not the best possible code, but at this point I am going
+			for the last code in the compiler to implement it.}
+			MACRO3(OP_EXCH,TAC2,REGC);
+			MACRO4(OP_MOVE,TAC0,TAC2,FILTST);
+ ---------------------------------
+			the AC use here is such that REGC is always above 2, so the only
+			reason for 2 not to be free is that realregc is using it.  This is
+			certainly not the best possible code, but at this point I am going
+			for the last code in the compiler to implement it.}
+			MACRO3(OP_EXCH,TAC2,REGC);
+(* 321 - use SETM, for nonzero sections *)
+			MACRO4(OP_SETM,TAC0,TAC2,FILTST);
+

@@ -1,0 +1,58 @@
+@Comment{OUTLINE of PASCAL-MEM.MSS.20 by Scribe 3C(1254) on 15 July 1983 at 04:33}
+ Table of Contents                                        1 PASCAL-MEM.CONT.4 line 3
+1. How to compile and execute your program.               2 PASCAL-MEM.MSS.20 line 86
+  1.1. How to use the normal compiler                     2 PASCAL-MEM.MSS.20 line 88
+  1.2. Compiler switches                                  4 PASCAL-MEM.MSS.20 line 243
+2. PASCAL Debug System (PASDDT)                           7 PASCAL-MEM.MSS.20 line 395
+  2.1. How PASDDT works                                   7 PASCAL-MEM.MSS.20 line 420
+  2.2. Commands for controlling your program              8 PASCAL-MEM.MSS.20 line 492
+  2.3. Single step mode                                  10 PASCAL-MEM.MSS.20 line 561
+  2.4. Commands for looking at and changing variables    11 PASCAL-MEM.MSS.20 line 623
+  2.5. Looking around in the source file                 12 PASCAL-MEM.MSS.20 line 693
+  2.6. FIND 'string'                                     12 PASCAL-MEM.MSS.20 line 704
+  2.7. A warning about confusing PASDDT                  12 PASCAL-MEM.MSS.20 line 725
+3. Basic Input/Output                                    14 PASCAL-MEM.MSS.20 line 750
+  3.1. Standard Files                                    14 PASCAL-MEM.MSS.20 line 764
+  3.2. Other ways of specifying a file name              15 PASCAL-MEM.MSS.20 line 840
+  3.3. Details about terminal I/O                        16 PASCAL-MEM.MSS.20 line 883
+  3.4. Reading characters                                17 PASCAL-MEM.MSS.20 line 955
+                              charproc                   17 PASCAL-MEM.MSS.20 line 956
+    3.4.1. Turning end of lines into blanks              17 PASCAL-MEM.MSS.20 line 958
+    3.4.2. Reading strings                               18 PASCAL-MEM.MSS.20 line 1027
+4. Additional Input/Output Facilities                    20 PASCAL-MEM.MSS.20 line 1085
+  4.1. Extra options in file I/O                         20 PASCAL-MEM.MSS.20 line 1091
+                              open                       20 PASCAL-MEM.MSS.20 line 1093
+    4.1.1. Labelled tapes                                22 PASCAL-MEM.MSS.20 line 1212
+    4.1.2. I/O Error processing                          24 PASCAL-MEM.MSS.20 line 1307
+  4.2. CLOSE                                             25 PASCAL-MEM.MSS.20 line 1395
+                              close                      25 PASCAL-MEM.MSS.20 line 1396
+  4.3. RENAME                                            25 PASCAL-MEM.MSS.20 line 1418
+                              rename                     25 PASCAL-MEM.MSS.20 line 1419
+  4.4. DELETE                                            26 PASCAL-MEM.MSS.20 line 1439
+                              delete                     26 PASCAL-MEM.MSS.20 line 1440
+  4.5. UPDATE                                            26 PASCAL-MEM.MSS.20 line 1452
+                              update                     26 PASCAL-MEM.MSS.20 line 1453
+  4.6. Random access                                     26 PASCAL-MEM.MSS.20 line 1480
+                              randac                     26 PASCAL-MEM.MSS.20 line 1481
+  4.7. I/O to strings                                    28 PASCAL-MEM.MSS.20 line 1593
+                              strio                      28 PASCAL-MEM.MSS.20 line 1594
+5. Extensions to Pascal Syntax                           30 PASCAL-MEM.MSS.20 line 1658
+  5.1. Extended CASE Statement                           30 PASCAL-MEM.MSS.20 line 1664
+  5.2. LOOP Statement                                    30 PASCAL-MEM.MSS.20 line 1688
+6. Standard Procedures and Functions                     31 PASCAL-MEM.MSS.20 line 1712
+7. Things to look out for                                34 PASCAL-MEM.MSS.20 line 1921
+  7.1. Errors that this compiler won't tell you about    34 PASCAL-MEM.MSS.20 line 1931
+  7.2. Extensions                                        35 PASCAL-MEM.MSS.20 line 2002
+ Index                                                   38 -SCRIBE-SCRATCH-.21-11-2.100021 line 2
+	Alphabetic Listing of Cross-Reference Tags and Labels
+
+Tag or Label Name                    Page   Label Value  Source file Location
+-----------------------------------------------------------------------------
+CHARPROC                               17         3.4  PASCAL-MEM.MSS.20 line 956
+CLOSE                                  25         4.2  PASCAL-MEM.MSS.20 line 1396
+DELETE                                 26         4.4  PASCAL-MEM.MSS.20 line 1440
+OPEN                                   20         4.1  PASCAL-MEM.MSS.20 line 1093
+RANDAC                                 26         4.6  PASCAL-MEM.MSS.20 line 1481
+RENAME                                 25         4.3  PASCAL-MEM.MSS.20 line 1419
+STRIO                                  28         4.7  PASCAL-MEM.MSS.20 line 1594
+UPDATE                                 26         4.5  PASCAL-MEM.MSS.20 line 1453

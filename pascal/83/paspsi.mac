@@ -1,0 +1,549 @@
+	title PASPSI - Tops-20 interrupt handling
+
+	search monsym,pasunv, macsym, jobdat
+	sall
+	.direc	sfcond
+	.direc	flblst
+
+	twoseg
+
+	entry	psidef,psiena,psidis
+	extern	lockc., level., leav., in.ddt
+	extern	tty, ttyout, safbeg, safend, getlnx
+ifn klcpu,<extern  sn.cod>
+
+;Modified 9/81 by Sam@SANDIA to remove direct access to OLDPC. and CHNTB.
+; to allow mixed PASCAL and FORTRAN using FOROTS...
+
+	reloc 0
+
+ttyb0:	block ^D50		;buffers for tty at 3 interrupt levels
+ttyb1:	block ^D50
+ttyb2:	block ^D50
+
+ife tenex,<block 1		;for arith trap>
+dispt:	block ^D36		;pascal routine to call for each channel
+
+a.xrir:	3			;arg list for XRIR%
+	block	2
+
+;here is the data we need to know in INTMOD about LEVTAB and CHNTAB 
+chnadr:	block	1		;address of CHNTAB
+levadr:	block	1		;address of LEVTAB
+levbpt:	block	1		;byte pointer to get level number from CHNTAB,
+				;  indexed by H
+xsirfl:	block	1		;non-zero if XSIR done
+
+ife tenex,<
+trapbl:	block	4		;arith trap block
+> ;ife tenex
+
+	reloc 400000
+
+ttybuf:	adrs	ttyb0		;we get tty buffer from this, indexed
+	adrs	ttyb1
+	adrs	ttyb2
+
+disp:	repeat ^D36,<		;;chntab entries point to these
+	adjstk	p,27
+	pushj	p,intmod
+>
+
+apracs==-23
+virtpc==-3
+pcadr==-1
+
+
+intmod:
+ifn klcpu,<
+	skipe	sn.cod		;skip if not extended addressing
+	 jrst	[dmovem	0,apracs(p) ;main dispatcher - save ac's
+		dmovem	2,apracs+2(p)
+		movei	0,<p-4>	;# ACs left to save
+		movei	1,4
+		xmovei	2,apracs+4(p)
+		extend	0,[xblt]
+		jrst	save.9]
+>;ifn klcpu
+	movem	0,apracs(p)	;main dispatcher - save ac's
+	hrli	0,1
+	hrri	0,apracs+1(p)
+	blt	0,apracs+17(p)
+
+save.9:	hrrz	b,(p)		;place in disp we came from
+	subi	b,disp+2
+	lsh	b,-1		;arguments for the pascal proc called:
+				;b _ index of interrupt
+	move	h,chnadr	;address of channel table
+	addi	h,(b)		;h _ address of entry in table
+	ldb	a,levbpt	;a _ level number
+	skipe	d,lockc.	;interrupts locked out?
+	 jrst	locked		;yes - defer it
+	move	d,levadr	;e _ address of flag,PC pair
+	addi	d,-1(a)
+	move	e,(d)		;  [this is the LEVTAB entry]
+	skipe	xsirfl		;if old format
+	jrst	save91		;not - don't need this
+	movem	e,pcadr(p)	;save address for restoring flag/PC
+	move	e,(e)		;get the actual one-word PC
+	hllzm	e,virtpc(p)	;in old format, have to construct flag/PC
+	hrrzm	e,virtpc+1(p)
+	xmovei	e,virtpc(p)	;and use this as address
+save91:	xmovei	f,apracs(p)	;f _ addr of ac save area
+	move	c,1(e)		;c _ old PC address
+	caie	b,6		;see if arith overflow
+	cain	b,7
+	 jrst	[skipe in.ddt	;or in debugger
+		 jrst ignore
+		hlrz t,(c)	;instruction after bad one
+		caie t,(jfcl)	;is it jfcl?
+		jrst intok	;no, process normally
+		pushj p,clearr	;yes - clear result
+		jrst ignore]	;and return
+intok:	hrrz	t,c		;see if this is deferred - local addr only
+	setz	d,		; assume not
+	cain	t,leav.
+		;all deferred int's happen at this magic addr
+	 movei	d,1		;d _ deferred flag
+	push p,level.
+	movem a,level.		;now at new level
+	push p,fileol+tty	;save the state of tty i/o
+	push p,filcmp+tty
+	push p,filbix+tty
+	push p,filbct+tty
+	push p,filbpt+tty
+	push p,filtst+tty
+	setzm filcmp+tty	;reinit tty
+	movei t,1
+	movem t,fileol+tty
+	hrro a,ttybuf(a)
+	xmovei a,(a)		;fixup section number
+	movem a,filbix+tty
+	setzm filbct+tty
+	hrrz a,filgln+tty	;see whether using lazy I/O
+	movei t,314157
+	caie a,getlnx		;normal readln?
+	movei t,314156		;no, lazy one, do lazy INIT
+	movem t,filtst+tty
+	push p,filcmp+ttyout	;likewise ttyoutput
+	setzm filcmp+ttyout
+ife tenex,<
+	push p,trapbl+.arpfl
+	push p,trapbl+.aropc
+>
+	push p,(p)		;top location gets garbaged
+	push p,(p)		;two locations for extended
+
+	pushj p,@dispt(b)
+
+	pop p,(p)
+	pop p,(p)		;reverse the above
+ife tenex,<
+	pop p,trapbl+.aropc
+	pop p,trapbl+.arpfl
+>
+	pop p,filcmp+ttyout
+	pop p,filtst+tty
+	pop p,filbpt+tty
+	pop p,filbct+tty
+	pop p,filbix+tty
+	pop p,filcmp+tty
+	pop p,fileol+tty
+	pop p,level.
+	skipe xsirfl		;if not xsir
+	jrst ignore		;it is, nothing more
+	move d,pcadr(p)		;this is address of LEVTAB entry
+	move e,virtpc(p)	;go from flag/PC to single word
+	ior e,virtpc+1(p)
+	movem e,(d)		;and put it back
+ignore:	movem n,apracs+n(p)	;use new value of n if changed
+ifn klcpu,<
+	skipe	sn.cod		;skip if extended addressing
+	 jrst	[movei	0,<p-4>		;restore ac's
+		xmovei	1,apracs+4(p)
+		movei	2,4
+		extend	0,[xblt]
+		dmove	0,apracs(p)
+		dmove	2,apracs+2(p)
+		jrst	rest.9]
+>;ifn klcpu
+	hrli	0,apracs+1(p)	;restore ac's
+	hrri	0,1
+	blt	0,17
+	move	0,apracs(p)
+
+rest.9:	pop	p,(p)		;restore stack
+	adjstk	p,-27
+	debrk%
+
+;Here is the code for a user arithmetic trap
+
+ife tenex,<
+	reloc
+
+ttybx:	block ^D50
+
+	reloc
+
+dotrap:	adjstk	p,30
+ifn klcpu,<
+	skipe	sn.cod		;skip if not extended addressing
+	 jrst	[dmovem	0,apracs(p) ;main dispatcher - save ac's
+		dmovem	2,apracs+2(p)
+		movei	0,<p-4>	;# ACs left to save
+		movei	1,4
+		xmovei	2,apracs+4(p)
+		extend	0,[xblt]
+		jrst	trap.9]
+>;ifn klcpu
+	movem	0,apracs(p)	;main dispatcher - save ac's
+	hrli	0,1
+	hrri	0,apracs+1(p)
+	blt	0,apracs+17(p)
+
+trap.9:	seto b,			;b _ index; -1 for arith trap
+	xmovei e,trapbl+.arpfl	;e _ address of flag,PC pair
+	move c,1(e)		;c _ old PC address
+	hrrz t,c		;arith overflow - t _ pc
+	skipe in.ddt		;or in debugger
+	 jrst notrap
+	xmovei f,apracs(p)	;f _ addr of ac save area
+	hlrz t,(c)		;instruction after bad one
+	caie t,(jfcl)		;is it jfcl?
+	jrst trapok		;no, process normally
+	pushj p,clearr		;yes - clear result
+	jrst notrap		;and return
+
+trapok:	movei d,0		;d _ deferred flag, always 0
+	push p,fileol+tty	;save the state of tty i/o
+	push p,filcmp+tty
+	push p,filbix+tty
+	push p,filbct+tty
+	push p,filbpt+tty
+	push p,filtst+tty
+	setzm filcmp+tty	;reinit tty
+	movei t,1
+	movem t,fileol+tty
+	xmovei a,ttybx		;new tty buffer
+	movem a,filbix+tty
+	setzm filbct+tty
+	hrrz a,filgln+tty	;see whether using lazy I/O
+	movei t,314157
+	caie a,getlnx		;normal readln?
+	movei t,314156		;no, lazy one, do lazy INIT
+	movem t,filtst+tty
+	push p,filcmp+ttyout	;likewise ttyoutput
+	setzm filcmp+ttyout
+	push p,(p)		;top location gets garbaged
+	push p,(p)		;two locations for extended
+
+	pushj p,@dispt-1
+
+	pop p,(p)
+	pop p,(p)		;reverse the above
+	pop p,filcmp+ttyout
+	pop p,filtst+tty
+	pop p,filbpt+tty
+	pop p,filbct+tty
+	pop p,filbix+tty
+	pop p,filcmp+tty
+	pop p,fileol+tty
+notrap:	movem n,apracs+n(p)	;use new value of n if changed
+ifn klcpu,<
+	skipe	sn.cod		;skip if extended addressing
+	 jrst	[movei	0,<p-4>		;restore ac's
+		xmovei	1,apracs+4(p)
+		movei	2,4
+		extend	0,[xblt]
+		dmove	0,apracs(p)
+		dmove	2,apracs+2(p)
+		jrst	notr.9]
+>;ifn klcpu
+	hrli	0,apracs+1(p)	;restore ac's
+	hrri	0,1
+	blt	0,17
+	move	0,apracs(p)
+
+notr.9:	adjstk	p,-30		;restore stack
+	xjrstf	trapbl+.arpfl
+
+> ;ife tenex
+
+;CLEARR - zero the result of computation.
+
+clearr:	move a,-1(c)	;instruction interrupted
+;the place we have to clear depends upon the operation that blew up
+;so the following code uses a table with one entry for each opcode,
+;specifying a routine to use.
+	ldb b,[point 9,a,8] ;op code of one that blew
+	cail b,110	;if not 110-377
+	caile b,377
+	popj p,		;ignore
+	subi b,110	;get offset into dispatch table
+	adjbp b,[point 6,zertab,5] ;get pointer to routine code
+	ldb c,b		;c _ routine code
+	jrst @zerdis(c)	;go to routine
+
+;This is a dispatch table of routines to go to for various kinds of
+;instruction.
+zerdis:	ifiw	clrn		;noop
+	ifiw	clra		;clear one AC
+	ifiw	clra2		;clear two AC's
+	ifiw	clra4		;clear four AC's
+	ifiw	clrm		;clear memory
+	ifiw	clrm2		;clear two memory loc's
+	ifiw	clram		;clear AC and memory
+	ifiw	clra2m		;clear two AC's and memory
+
+;nothing
+clrn:	popj p,
+
+;clear one AC
+clra:	ldb b,[point 4,a,12] ;ac field
+	add b,f		;where it is stored
+	setzm (b)	;clear ac
+	popj p,
+
+;clear AC and AC+1
+clra2:  ldb b,[point 4,a,12] ;ac
+	move c,b
+	add c,f		;relocate to where stored
+	setzm (c)
+	addi b,1	;next ac
+	andi b,17
+	add b,f
+	setzm (b)
+	popj p,
+
+;clear AC to AC+3, handling wraparounds
+clra4:	ldb a,[point 4,a,12] ;ac
+	move b,a
+	add b,f
+	setzm (b)
+	movei c,3	;three more ac's
+clra4l:	addi a,1
+	move b,a
+	andi b,17
+	add b,f
+	setzm (b)
+	sojg c,clra4l
+	popj p,
+
+;clear effective address
+clrm:	ldb b,[point 4,a,17] ;index reg
+	tlz a,777757	;now clear op code,ac, and index from instruction
+	caie b,0		;unless no index reg
+	 tlo a,c		;modify to use index c
+	tlo a,(xmovei b,)	;movei
+	add b,f		;relocate to addr of index reg used
+	move c,(b)	;and get contents of index reg
+	xct a		;do it - b now has addr of thing to be changed
+	txnn b,<777776777760> ;is it an AC?
+	jrst clrac	;if it is an ac, it is special
+	setzm (b)	;no - just do it
+	popj p,
+
+clrac:	move c,b	;can't garbage b
+	add c,f		;relocate into user ac's
+	setzm (c)	;clear it
+	popj p,
+
+;clear effective address and E+1
+clrm2:	pushj p,clrm	;do first one
+	aos b		;now go to next
+	txnn b,<777776777760> ;is it an AC?
+	jrst clrac
+	setzm (b)
+	popj p,
+
+;clear AC and E
+clram:	pushj p,clra
+	pushj p,clrm
+	popj p,
+
+;clear AC, AC+1, and E
+clra2m:	pushj p,clra2
+	pushj p,clrm
+	popj p,
+
+;The following codes are used in the table of opcode data.  They are
+;offsets in the dispatch table above. 
+	dn==0
+	da==1
+	da2==2
+	da4==3
+	dm==4
+	dm2==5
+	dam==6
+	da2m==7
+
+;here we have a table of what to clear for each instruction
+; that can cause overflow/underflow, etc.  It simply indicates where
+; the results of that instruction go.  This table was made up when I
+; was half asleep, so please report any errors in it.  Its accuracy
+; is obviously crucial to the behavior of this code.
+zertab:	byte (6)da2,da2,da2,da2,da2,da2	;110-115
+	byte (6)da4,da4,dn,da2,da,dn	;116-123
+	byte (6)dn,dm2,da,da,da2,dam	;124-131
+	byte (6)da,dn,dn,dn,dn,dn	;132-137
+	byte (6)da,da2,dm,dam,da,da	;140-145
+	byte (6)dm,dam,da,da2,dm,dam	;146-153
+	byte (6)da,da,dm,dam,da,da2	;154-161
+	byte (6)dm,dam,da,da,dm,dam	;162-167
+	byte (6)da,da2,dm,dam,da,da	;170-175
+	byte (6)dm,dam,dn,dn,dn,dn	;176-203
+	byte (6)dn,dn,dn,dn,da,da	;204-211
+	byte (6)dm,dm,dn,dn,dn,dn	;212-217
+	byte (6)da,da,dm,dam,da2,da2	;220-225
+	byte (6)dm,da2m,da2,da2,dm,da2m	;226-233
+	byte (6)da2,da2,dm,da2m,dn,dn	;234-241
+	z				;242-247
+	z				;250-255
+	z				;256-263
+	byte (6)dn,dn,dn,dn,da,da	;264-271
+	byte (6)dm,dam,da,da,dm,dam	;272-277
+	z				;300-305
+	z				;306-313
+	z				;314-321
+	z				;322-327
+	z				;330-335
+	byte (6)dn,dn,da,da,da,da	;336-343
+	byte (6)da,da,da,da,dm,dm	;344-351
+	byte (6)dm,dm,dm,dm,dm,dm	;352-357
+	byte (6)da,da,da,da,da,da	;360-365
+	byte (6)da,da,dm,dm,dm,dm	;366-373
+	byte (6)dm,dm,dm,dm,dn,dn	;374-377
+
+
+;psidef(index,level,proc)
+
+psidef:	
+
+ife tenex,<
+	jumpl	b,trpdef	;if -1, setting trap
+> ;ife tenex
+
+	cail	b,0		;channel 0 to 35
+	caile	b,^D35
+	 jrst	badind
+	cail	c,1		;level 1 to 3
+	caile	c,3
+	 jrst	badlev
+	xmovei	d,(d)		;only address part
+	movem	d,dispt(b)	;store address
+	move	d,b		;d _ channel number
+	move	a,b
+	lsh	a,1		;a _ index into disp
+	xmovei	e,disp(a)	;e _ disp address for this channel
+	movei	a,.fhslf	;get location of channel and level tables
+	rir%			;first try the old one
+	 erjmp	psidfn		;no - use new
+  ;here when SIR was used. LEVTAB,,CHNTAB is in B
+	hlrzm	b,levadr	;save for INTMOD
+	hrrzm	b,chnadr
+	move	a,[point 18,0(h),17] ;byte pointer to old format level number
+	movem	a,levbpt	;save it
+	setzm	xsirfl		;not XSIR
+	addi	d,(b)		;d _ address in chntab
+	movem	e,(d)		;put dispatch address into the table
+	hrlm	c,(d)		;and level number in LH
+	ret
+
+  ;here when XSIR was used.
+psidfn:	movei	b,a.xrir
+	xrir%
+	move	b,a.xrir+.silvt	;save for INTMOD
+	movem	b,levadr
+	move	b,a.xrir+.sicht
+	movem	b,chnadr
+	move	a,[point 6,0(h),5] ;byte pointer to new format level location
+	movem	a,levbpt
+	setom	xsirfl
+	add	d,a.xrir+.sicht	;location in channel table
+	movem	e,(d)		;store in channel table
+	dpb	c,[point 6,0(d),5] ;store level number in channel table
+	ret
+
+ife tenex,<
+;Set up arithmetic trap
+trpdef:	aojn	b,badind	;make sure it is -1
+	xmovei	d,(d)		;only address part
+	movem	d,dispt-1	;store address
+	xmovei	e,dotrap	;reset trap address so we have the section
+	movem	e,trapbl+.arnpc
+	ret
+> ;ife tenex
+
+;psienable(index)
+
+psiena:	
+ife tenex,<
+	jumpl	b,trpena
+> ;ife tenex
+	cail	b,0
+	caile	b,^D35
+	jrst	badind
+	movn	a,b
+	movx	b,<1b0>		;bit 0
+	lsh	b,(a)		;shift to requested bit position
+	movei	a,.fhslf	;this process
+	aic%
+	ret
+
+;;; Here to turn on arithmetic traps
+
+ife tenex,<
+trpena:	aojn	b,badind
+	movei	a,.fhslf
+	movei	b,.swart
+	xmovei	c,trapbl
+	swtrp%
+	ret
+> ;ife tenex	
+
+;psidisable(index)
+
+psidis:	
+ife tenex,<
+	jumpl	b,trpdis
+> ;ife tenex
+	cail	b,0
+	caile	b,^D35
+	jrst	badind
+	movn	a,b
+	movx	b,<1b0>
+	lsh	b,(a)
+	movei	a,.fhslf
+	dic%
+	ret
+
+ife tenex,<
+;Turn off arith trap
+trpdis:	aojn	b,badind
+	movei	a,.fhslf
+	movei	b,.swart	;set trap block
+	movei	c,0		;none
+	swtrp%
+	ret
+> ;ife tenex
+
+badlev:	hrroi a,[asciz /Psi: priority level must be 1 to 3
+/]
+	esout%
+	jrst	endl
+badind:	hrroi	a,[asciz /Psi: channel must be 0 to 35
+/]
+	esout%
+endl:	haltf%
+	hrroi	a,[asciz /Can't continue
+/]
+	esout%
+	jrst	endl
+
+locked:	movx	t,<1b0>		;channel 0
+	movn	a,b
+	lsh	t,(a)		;channel .b
+	iorm	t,(d)		;or into deferred int.word
+	jrst	ignore		;now ignore interrupt
+
+	end

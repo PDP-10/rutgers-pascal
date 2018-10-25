@@ -1,0 +1,68 @@
+	title PASCNV - random type conversion routines
+
+	search pasunv,monsym,macsym
+
+	entry to6,from6,curjfn,setjfn,cclsw,cclacs
+
+	extern relcl.,%cclsw	;[260]
+
+	twoseg
+
+	reloc 400000
+
+to6:	;b,c - alfa
+	;d - output
+	
+	movei a,6
+	move e,[point 7,b]
+	move f,[point 6,d]
+to6l:	ildb t,e
+	caige t," "	;treat ctl char's as blank
+	movei t," "
+	cail t,140	;treat lower case as upper
+	subi t,40
+	subi t," "		;ascii to sixbit
+	idpb t,f
+	sojg a,to6l
+	movem d,1(p)
+	popj p,
+
+from6:	;b - integer
+	;c - addr. of output
+
+	movei a,6
+	move d,[point 6,b]
+	xmovei	bix,(c)
+	movx	c,<point 7,(bix)>
+	move t,[ascii /     /]
+	movem t,1(bix)
+from6l:	ildb t,d
+	addi t," "		;sixbit to ascii
+	idpb t,c
+	sojg a,from6l
+	popj p,
+
+curjfn:	move a,filjfn(b)
+	movem a,1(p)
+	popj p,
+
+setjfn:	move t,filtst(b)	;if file not yet initialized
+	caie t,314157
+	pushj p,initb.##	;do so
+	pushj p,relcl.		;[260]
+	movem c,filjfn(b)
+	popj p,
+
+cclsw:	move a,%cclsw
+	movem a,1(p)
+	popj p,
+
+cclacs:	move a,%cclsw+1
+	movem a,(b)
+	move a,%cclsw+2
+	movem a,(c)
+	move a,%cclsw+3
+	movem a,(d)
+	popj p,
+
+	end

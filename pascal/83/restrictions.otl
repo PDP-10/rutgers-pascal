@@ -1,0 +1,10 @@
+@Comment{OUTLINE of RESTRICTIONS.MSS.1 by Scribe 3C(1254) on 1 August 1982 at 04:02}
+1. Conformance of this implementation to ISO/DP 7185      2 RESTRI.MSS.4 line 1
+  1.1 Implementation-defined items                        3 RESTRI.MSS.4 line 50
+  1.2 Errors not reported by the compiler or runtimes     4 RESTRI.MSS.4 line 119
+  1.3 Extensions not reported by the compiler or runtim   6 RESTRI.MSS.4 line 213
+  1.4 Limits on size and complexity                      11 RESTRI.MSS.4 line 546
+    1.4.1 Limits that may not be changed                 12 RESTRI.MSS.4 line 548
+    1.4.2 Limits that may be changed                     12 RESTRI.MSS.4 line 573
+  1.5 Other warnings                                     13 RESTRI.MSS.4 line 597
+ Table of Contents                                        1 -SCRIBE-SCRATCH-.18-11-1.100018 line 3

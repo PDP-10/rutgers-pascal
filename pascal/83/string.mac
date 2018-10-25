@@ -1,0 +1,184 @@
+	title STRING - simple string routines for pascal
+
+;*******************************************
+;WARNING:  This module uses KL instructions
+;*******************************************
+
+	twoseg
+
+	search monsym,pasunv,macsym
+
+	reloc 400000
+
+	entry putstr,findnull
+	entry byteset,bytewrite,bytepos,arrset,arrwri
+
+;putstr(source,count,destin,offset)
+;	b - source start
+;	c - source size
+;	d - count to move
+;	e - dest start
+;	f - dest size
+;	g - offset
+
+putstr::move	t,c		;t _ source size
+	movx	a,<point 7,(b)>	;a _ byte pointer to source
+	sub	f,g		;f _ room in destin
+	addi	f,1
+	camle	d,f		;d _ chars to move
+	 move	d,f
+	camle	c,d
+	 move	c,d
+	sosn	d,g
+	 skipa	d,[point 7,(e)]
+	 adjbp	d,[point 7,(e)]
+	extend	t,[movslj	;extended move string
+		   " "]		;fill, if needed
+cpopj:	popj p,
+
+;findnull(source) --> offset
+;	b - source start
+;	c - source size
+findnu:	xmovei bix,(b)
+	movx b,<point 7,(bix)> ;b _ start
+	move d,c	;d _ saved size
+findnl:	sojl c,findnf	;if run out, failed to find any
+	ildb t,b
+	jumpe t,findns
+	jrst findnl
+
+findns:	sub d,c		;d _ offset for one found
+	movem d,1(p)
+	popj p,
+
+findnf:	setzm 1(p)
+	popj p,
+
+	extern getlnx,putlnx,illfn,putpgx,getchr,clofil,norchp
+ifn klcpu,<extern sn.cod>
+
+	filbct==30		;count left
+	filbpt==27		;byte ptr
+	filfps==26		;first position - for getindex only
+
+define xblt(ac,foo),<extend ac,[020B8]>
+
+bytnt:	adrs	<bytget,bytput,getlnx,putlnx,0,.+1>
+bytntx:	adrs	<illfn,illfn,putpgx,illfn,illfn,cpopj,cpopj,cpopj>
+
+bytget:	move bix,filbix(b)
+	ildb a,filbpt(b)
+	jumpe a,bytend
+	jrst getchr
+
+bytput:	move a,filcmp(b)
+	move bix,filbix(b)
+	idpb a,filbpt(b)
+	setzm t,
+	move a,filbpt(b)
+	idpb t,a
+	popj p,
+
+;byteset and bytewrite work just like STRSET and STRWRITE, but take as
+;arguments byte pointers for where to start reading or writing.
+;They are designed to play with strings where JSYS's are also being
+;used.  So READ will return EOF at a null and WRITE will put null at
+;end of file.  No check for end of string is done, since the JSYS's don't.
+;  b - FCB
+;  c - byte pointer
+;ARRSET and ARRWRITE are the same, but are used at the beginning of an
+;array - they take an array as arguments instead of a byte pointer.
+
+arrset:	move t,filtst(b)	;init if not already inited
+	caie t,314157
+	pushj p,initb.##
+	movem c,filbix(b)
+	movx c,<point 7,(bix)>
+	movei a,0
+	pushj p,strop0
+	jrst @filget(b)
+
+bytese:	movei a,0		;normal eof
+	pushj p,stropn
+	jrst @filget(b)
+
+arrwri:	move t,filtst(b)	;init if not already inited
+	caie t,314157
+	pushj p,initb.##
+	movem c,filbix(b)
+	movx c,<point 7,(bix)>
+	movei a,1
+	jrst strop0
+
+bytewr:	movei a,1		;normal eof
+	;jrst stropn
+
+stropn:	move t,filtst(b)	;init if not already inited
+	caie t,314157
+	pushj p,initb.##
+strop0:	skipe filclo(b)		;any closing needed?
+	pushj p, [ push p,a
+		   push p,c
+		   setz c,		;yes - do it
+	           pushj p,clofil
+		   pop p,c
+		   pop p,a]
+	movem c,filbpt(b)
+	movem a,fileof(b)
+	trc a,1
+	movem a,filbad(b)
+	setzm fileol(b)
+	movei t,fl%fme		;allow format error
+	movem t,filflg(b)
+ifn klcpu,<
+	skipe sn.cod		;XBLT if extended
+	jrst strop1
+> ;ifn klcpu
+	move t,norchp		;ifiw norcht(a)
+	movem t,filcht(b)
+	hrli t,bytnt		;dispatch addresses we want
+	hrri t,filr11(b)	;whre to copy vector
+	blt t,filr99(b)		;local blt ok here!
+	popj p,
+
+ifn klcpu,<
+
+;dispatch vector handling for extended addressing
+;first time have to set up section number.  We have check for the
+; right section number each time, since it is possible to save this
+; program and then run it in a different section.
+strop1:	xmovei t,bytntx		;init section number
+	camn t,bytnt+5		;already set up?
+	jrst strop2		;yes - forget this
+	hllm t,bytnt
+	hllm t,bytnt+1
+	hllm t,bytnt+2
+	hllm t,bytnt+3
+	hllm t,bytnt+5
+
+;here the rest of the time
+strop2:	move t,norchp		;assume no lower case mapping
+	movem t,filcht(b)
+	movei t,filr99-filr11+1
+	xmovei a,bytnt		;dispatch addresses we want
+	push p,b
+	xmovei b,filr11(b)	;place to put it in FCB
+	xblt t,
+	pop p,b
+	ret
+
+> ;ifn klcpu
+
+bytend:	move t,filbad(b)
+	movem t,fileof(b)
+	movem t,fileol(b)
+	setzm filcmp(b)
+	movei t,iox4
+	movem t,filerr(b)
+	popj p,
+
+bytepo:	move t,filbpt(b)
+	movem t,1(p)
+	popj p,
+
+	end

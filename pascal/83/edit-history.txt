@@ -1,0 +1,505 @@
+Before edit 257, this file lists only compiler edits.  I am
+now adopting the policy that PASCMP, the .EXE files, and the
+library .REL files should have the correct version number.
+The other source files do not necessarily.
+
+1       CLEAN UP COMMENT SCANNING AND ALLOW /* */ BRACKETS.
+        NOTE THAT THIS \ WOULD HAVE TERMINATED THIS COMMENT
+        PRIOR TO FIX.
+2       INCREASE STACKANDHEAP, GET CORE IF NEEDED ON PROGRAM
+        ENTRY, FIX PARAMETER PASSING BUG, LOAD PASREL FROM
+        SYS: INSTEAD OF DSK:, GENERATE FLOAT AND FIX INLINE.
+        (FROM HEDRICK)
+NB:     RUNTIM has now been modified to pass all characters,
+        including control characters as well as lower case.
+        It no longer turns tabs into spaces.  Thus it was
+        necessary to put this file through a program that
+        expanded tabs into spaces when they were in strings.
+        Thus FILCOM with the old version should specify /S
+        or lots of irrelevant differences will be found.
+3       MAP LOWER CASE TO UPPER EXCEPT IN STRINGS.  (DOESN'T
+        SOLVE THE PROBLEM ABOUT SETS, THOUGH.)  HEDRICK.
+4       use SCAN for file spec's, and fix to be called by
+        COMPIL.  Hedrick.
+5       add /CREF switch.  Hedrick.
+6       allow PROGRAM statement.  Syntax check but ignore it.
+        fix bug that caused lower case char. after a string to put compiler in loop
+        allow <> for #
+        allow LABEL declaration.  Syntax check bug ignore it.
+        with /CREF/OBJ put only 3 instructions per line (4
+          overflow a LPT line)
+        use standard PACK and UNPACK
+        catch illegal characters
+7       add /HEAP switch for size of stack and heap
+        treat lower case as upper in sets
+10      Add STRSET and STRWRITE - equivalent to RESET and
+        REWRITE, but sets I/O into string
+        also GETINDEX, CLOSE, ROUND, CALLI
+        ALSO REDID RESET/REWRITE TO TAKE GOOD FILE NAMES
+11      Modify compiler to use new RESET/REWRITE.
+12      Make PASCAL programs self-expanding
+13      ADD DDT SYMBOL NAMES FOR ROUTINES(BLOCK-STRUCTURED)
+        use PROGRAM name as module and entry name
+        allow strset/write on non-TEXT files
+        add opt. 4th arg to strset/write: limit
+14      allow read of string - gets rest of line
+        add rename,dismiss,update,dumpin/out,useti/o,
+        and xblock arg to reset and friends
+15      a few more arg's to some runtimes
+16      detect unexpected EOF
+17      DECUS VERSION - CHANGE DDT SYMBOLS TO BE OK FOR DEC DDT
+20      CMU patch: do packed struct. correctly. Did not adopt:
+        (1) replace CAMG, etc., for text (their fix did unnecessary work for
+          the most common cases, and didn't get all of the obscure ones)
+        (2) use Knuth's defn of MOD (the one here is so much faster, who care about
+          negative numbers?)
+        (3) clean up variants in NEW (they say it is unnecessary)
+        Also: fix ill mem ref if undef var first after READ
+21      allow PROGRAM <name>; (i.e. no file list)
+        allow null field list in record (for null variant, mainly)
+        fix MOD.  Much cleaner fix than CMUs.  Usually adds just one instruction
+        fix compare of PACKED ARRAY OF CHAR.  Get it all (I hope)
+        keep new from storing tag if no id (CMU's fix)
+        implement +,*,- as set operators
+22      restore MOD to be REM (Cyber does it that way)
+        fix all my added file things to use GETFN to scan
+          file name, so we properly handle external files, etc.
+        fix callnonstandard to pass external files
+        fix writewriteln so doesn't ill mem ref on undef file
+23      change enterbody to always zero locals.  Needed to ensure
+          that certain comparisons work, but a good thing anyway.
+        if typechecking is on, check for following nil or 0 pointer
+24      do not allow comparisons except those in manual.
+         means we don't have to zero locals on proc entry, ever.
+        add LOC(<proc>) that returns address of proc or ftn
+        add S:<integer> and H:<integer> comments, to set starting
+          addr of stack and heap respectively
+        change starting code to not disturb %rndev, etc. on restart
+25      add /ZERO (and $z) to control whether locals initialized
+          to zero.  Useful mostly to help find uninit.'ed pointers.
+26      allow record as extended lookup block
+        add error message's for ext. lookup block
+        don't check file pointers as if they were pointers!
+        use getfn instead of getfilename in break,breakin,
+          and close, to allow non-ascii files
+27      add NEWZ that does what NEW used to (zeros what it gets)
+30      fix NEW with : syntax, per Nagel.
+31      FIX ILL MEM REF IN READREADLN
+        ADD ERR MSG FOR ASSIGN TO FTN NAME OUTSIDE BODY
+32      add APPEND
+33      full implementation of PROGRAM statement
+        version numbering of output files and program
+        allow proc and func as parameters
+        remove LOC (subsumed by above)
+        add $V directive for version number
+34      allow list of entry points in PROGRAM statement
+35      fix error recovery in BLOCK, especially for /NOMAIN
+36      ALLOW DEBUGGING MULTIPLE FILES
+        remove T- option
+        NB: I have not removed the variables for T-, and also
+          supports exist for indeb. and exdeb., though they
+          are no longer used in PASCMP.
+37      fix bug in static link for level one proc's
+40      use RESDEV as external name for DISMISS
+        by default put request for PASLIB before FORLIB
+        improve format of /OBJECT listing
+        fix arg's to predefined functions
+        fix comparison of unpacked strings
+41      make it restartable
+        change kludge for file OUTPUT
+42      allow variable records for GET,PUT,and DUMPx
+        Currently DUMPx implemented in kludgey way.
+43      add 5 locations to file block for new runtimes
+        add PUTX
+        add optional arg to useti
+        allow 12 digit octal number
+44      Add SETPOS and CURPOS to compiler
+45      Add NEXTBLOCK to compiler and make check for
+        AC overlap with APPEND,UPDATE
+46      Repair CALLI to use 1 for true, and accept all
+         possible argument formats.
+47      Add some more functions
+        Repair calculations for NEW with packed arrays
+50      Generate correct code for 400000,,0
+        Reinitialize file ctl blocks at start
+        Don't open INPUT or OUTPUT unless asked
+51      Allow mismatch of byte size for SETSTRING
+        Fix GETLINENR
+52      Fixes from CMU:
+        To CALLNONSTANDARD: when depositing directly into
+          display, moved 2 ac's for all arg's of size 2,
+          without checking to see if VAR.  Assumed AC was
+          unchanged by BLT.
+        To SIMPLEEXPRESSION: optimization sometimes negated
+          a real constant.  If had been declared by CONST,
+          future ref's were to the negated quantity!
+53      Problems with dynamic memory expansion:
+        Arbitrarily asked for 40b more locations above
+          end of stack (for runtimes).  But some odd
+          procedure calls use more.  Need to figure out
+          how much memory is used.
+        CORERR just allocated memory up to (P).  Should
+          be 40(P), or however much is really needed.
+        So add STKOFFMAX, to keep track of how much
+          really needed.  CORALLOC is addr of the test for
+          sufficient memory, fixed up.
+54      More dynamic memory: Need to accumulate offsets
+          above top of stack, in case of
+          x(1,2,3,4,5,f(1,2,3,4,5,6)), etc., though an
+          actual problem seems a bit unlikely.
+55      Add require source file feature
+56      Clean up syntax for require file
+57      add tops20 version
+60      make tops20 strings work more like tops10
+61      add jsys pseudo-runtime
+        add tops20 runtimes and restrict runtimes that work only on one system
+        add +*@ after file name to control gtfjn in tops20
+62      make sure there is never data above the stack pointer
+63      convert time, runtime, setuwp for tops20
+64      input:/ for tops-20
+        empty entry in record
+        non-local goto's
+        fix procedure param's if not in ac's
+65      allow extra semicolon in case
+        remove references to exit labels
+66      speed up non-local goto's
+67      fix external proc's as proc param's
+70      fix ill mem ref if certain errors in type decl
+71      make file name in fcb be 7 bit for tops20
+72      make two fixup chains for 2 word constants, to
+        prevent giving LINK an ill mem ref
+73      make new use getfn for file names, to get EXTERN files
+74      allow new init. so tops10 version can work with emulator
+75      fix non-loc goto's - typo made goto chain bad
+76      allow a set in reset/rewrite to specify bits.
+        allow break char set in read/readln
+77      fix jsys and reset set arguments
+100     fix ac usage in readreadln from strings
+101     fix fltr and fix code generation
+102     Add klcpu - put improved packed array code under it
+103     Fix pointer to global symbol table in case that level
+        has already been output by some inner procedure
+104     Check stack overflow
+        Check to be sure structures aren't too big
+        Range check subranges in for loop and value parameters
+105     Use tables instead of -40B to convert from lower case
+106     Make subranges of reals illegal
+107     Abort creation of .REL file on all errors
+110     Allow [x..y] set construct
+111     Allow STRING and POINTER parameters to EXTERN proc's
+112     Clrbfi when error detected.  Bounds check sets [a..b]
+113     Make real number reader handle exact things exactly
+        Don't demand foward type ref's resolved at end of require file
+114     Write local fixups even if only non-loc gotos
+        Make CREF not say .FIELDID. for local gotos
+        maxint = 377777777777B
+115     Make tops10=false, kl=false work (tenex)
+116     IDRECSIZE entries for param, labelt type
+        Make NEXT NIL instead of 0 when not used, for COPYCTP
+117     Fix enumerated type in record
+120     Make initialization routine use JSP, for T20/Tenex so
+        don't have ill mem ref if emulator present
+121     Initialize CODEARRAY: fix bollixed INITPROC's
+122     KA's.  This includes fixing COPYSTP so it doesn't
+         try to follow NIL pointers.  Harmless if 377777 is a
+         legal address, but it isn't for KA's.
+123     Do POPF when can't find included file, so close gets done.
+124     Limit initprocedures to top level.
+        Initialize CREF off
+125     Do POPF when expected eof inside included file.
+126     Detect procedures not beginning with BEGIN
+127     INit CREF to FALSE, fix [const..var] set construct
+130     Fix KA bug wherein random word in core image is garbage
+131     Move cixmax to pasprm.pas so tops20 can use big value
+132     Replace KA10 with KACPU for op codes and NOVM for old
+        memory allocation.
+133     Fix JSYS to allow functions within it.  Garbaged stack.
+134     Allow DELETE in Tops-10, too.
+135     Fix LOG2 for big numbers.  Prevent ill mem ref's in
+        PACK and UNPACK with syntax errors.
+136     Add header line at top of each page with pg. number
+137     Reset line no. to 1 at start of page.
+        Fix bug in set constructors for CHAR
+140     Chnage order of SETMAP to closer to ASCII collating seq.
+141     Fix problem where REGC gets messed up by array subscript
+         calculations when ONFIXEDREGC is in effect.
+        Detect overflow in number scanning with JFCL.
+142     Make real number scanner scan anything legitimate
+143     Redo I/O to string in Tops-10 for new runtimes and fix
+         onfixedregc code for packed arrays
+144     Allow :/ in program and :@ in reset for Tops-10
+145     Change external name of GET to GET. for Wharton
+146     Reinit count in putrelcode to avoid garbage in .REL file
+147     Lines start with 2 on new pages.
+150     Fix bug in forward type references,
+        error recovery in fieldlist if garbage case type
+        symbol table in forward proc's for debugger
+151     Fix reversed args in I,J:INTEGER in procedure decl.
+152     Add DISPOSE
+153     Fix some reg usage problems with DISPOSE
+154     More reg usage problems with DISPOSE
+155     Source file name in DEBUG block
+156     Detect FTNNAME^.field := value.  Only bare ftn name
+        allowed on LHS of assignment.
+157     Add $A- to turn off arith check
+160     Add compiler switch /ARITHCHECK
+161     fix STRINg and POINTER
+162     fix REGSIZE
+163     fix TIME for Tops-20
+164     use Polish fixups in CASE
+165     in type decl, make sure ^THING gets local defn of THING,
+        even if it happens later and there is a higher level defn.
+        (This requires treating ^THING as forward always.)
+166     make assignment to func id from inner func work
+        initialize frecvar in fieldlist, to prevent ill mem ref
+          with null record decl.
+167     improvements to edit 165
+170     more improvements to 165 (this time to error handling)
+171     allow read into packed objects
+        allow read and write of binary files
+        make sure default file names don't use user-declared INPUT,
+           and OUTPUT
+        fix NEW of pointer that is part of packed array
+172     option string as third arg of RESET, etc.
+        evaluate upper bound of FOR statement only once
+173     allow files in any context; internal files
+174     fix to initprocedures from Hisgen
+175     make getfn take a param telling runtime validity check
+        needed.  SETSTRING, etc., do not
+176     better unterminated-comment error messages
+177     fix AC allocation in GETFILENAME
+200     fix addressing problem in loading file pointers
+201     make most manipulation of zero size objects be no-op.
+        Previously one might stomp on the next variable.
+202     insufficient initialization before RESET(TTY), etc.
+        fix POINTER passed by ref
+203     fix glitch in edit 202
+204     don't validity check the FCB for CLOSE, RCLOSE, and DISMISS
+205     fix AC in RENAME
+206     allow constants in WRITE statements for FILE OF INTEGER, etc.
+207     fix AC in GETFILENAME (again...)
+210     Allow 9 digit HEX numbers
+211     Fix output of string constants in .REL file
+212     Better error message if INPUT or OUTPUT redefined
+213     Fix procedure exit code if there is local variable
+214     Make debugger see locals of forward declared proc's
+215     Fix loop in CALLNONSTANDARD when args omitted in defn.
+216     Add $P: to set start of highseg (pure code)
+217	   LASTFILE can be NIL even when current expr is a file, if it
+	was gotten by indexing, etc.  Replace it with a field in
+	the ATTR, which is going to be more general.
+	x FIELDLIST to set up SIZE of the TAGWITHOUTID.  Did it
+	only with TAGWITHID
+220     add / between identifier and block name for CREF
+221     extensive changes for extended addressing
+222     Rutgers integration of extended addressing
+     Get rid of extra CRLF in RPG mode
+224	   Try to make code shorter with /DEBUG: (1) go back to LUUO's
+	for nonextended versions; (2) don't put fields into the
+	file that the debugger doesn't need
+	Fix minor problems with debugging extended programs
+225	   LC is set wrong for forward proc's
+226	   Fix to Fortran calling for KA cpu's
+227     Initialize XBLT_LOC in case of multiple compilation,
+	   prevent bogus XBLT_OP's in .REL file
+230	   Various AC misallocation because there was no equivalent
+	   to ONFIXEDREGC for VARIABLE.  Also a DMOVEM could be 
+	   generated for KA's.
+231	   with FOO=^PTR, PTR is now evaluated later.  Previously CREF
+	   did its thing at the point where IDSEARCH was done, which
+	   was at the end of the decl section.  That was the wrong
+	   place.  So we move it to the right place.
+232	   Make the current version work under Tops-10.  Mostly
+	   changed string I/O
+233	   Add TEMP_LC and DISP_LC, a uniform way to allocate runtime
+	   temporaries in LC.  We had at least 3 different ad hoc ways
+	   to do this, one of which was probably wrong.
+234        Prevent COPYCTP from following bad NEXT pointers
+235	   4-word sets for SET OF CHAR
+236     fix debugger info for 4-word sets
+237	   get rid of ERRMPTR and use ERRMARR - under some phase of
+	   the moon the list used by ERRMPTR is RELEASE'd.
+240	   conformant arrays
+241	   more ISO stuff - fixes to conformant syntax, the (A)
+	   kludge, long variable names
+242	   tighten up compatibility checking; slight rewrite of test
+   	   for whether something is conformant
+243	   prevent assignment to a conformant index variable
+244	   minor bug fixes
+245	   prevent incorrect adjust of stack when calling parametric
+	   procedures
+246	   use the right error message if he tries to compare arrays
+	   save NEWREG around Fortran procedures
+247	   allow extra entry vector entries
+250	fix AC usage in calling proc with conformant arg
+251-254 - nonexistent
+255	fix end of page
+256	handle bare CR
+257	fix problems where FOO[I] appears to be in high seg
+
+;start of global edit history.
+260	17-Jan-83	20: PASUNV,PASIO,PASCNV,PASCNV,PASPTY,PFORMS
+			10: PASUNV,PASIO,PASCMD,PFORMS
+	Change FILSPC (which was not used) to FILBLK.  The RH of this is
+	the offset into BLKTAB of the pointer to this FCB.  RCLOSE should
+	then clear the BLKTAB entry.  The object is to allow there to be
+	more than 140 file control blocks, as long as they aren't all
+	active at the same time.
+261	17-Jan-83	20 only: PASIO
+	Don't recreate extended data sections if the user restarts
+	an extended program.  At the moment we are still recreating the
+	heap and stack.
+262	2-Feb-83	both: PASCMP.PAS; 20 only: PASLNY,PASL5Y
+	In compiler, fix problem wherein the end of fixup chains for
+	   externals was being made relocatable 0.  Should be absolute.
+	   this was a result of edit 257
+	PASL%Y - have to cancel SWTRP before running LINK. Apparently
+	   RESET doesn't undo it, and LINK was blowing up.
+263	5-Feb-83	20 only: PASCMP.PAS
+	Large fixed offsets in extended code could be treated as
+	  relocatable.  Another problem with edit 257.
+264	7-Feb-83	PASCMP.PAS, PASCOM.MAC, HEAP.MAC, PASIO.MAC;
+			20only: PASDDT.MAC, PASMEM.MAC
+	For Tops-20 only: made a sharable high segment.  It work for
+	DISPOSE or MARK/RELEASE memory management, but not for the
+	Fortran interface.
+265	11-Feb-83	20 only: PASSEG.MAC,PASVEC.MAC
+	Supply a NEW for PASSEG that calls the right NEW depending upon
+	which the user wants.  Code like NEWCL. must call different NEW
+	for different programs.
+266	12-Feb-83	PASCMP.PAS
+	Edit 264 removed something from a conditional that shouldn't
+	have been.  GOTO's to global labels could get bad stacks.
+267	12-Feb-83	10 only: PASMEM,PASIO
+	Add Tops-20 Fortran interface to Tops-10.
+270	2x-Feb-83	20 only: PASVEC.MAC
+	add CCLSW and CCLACS to segment
+271	28-Feb-83	20 only: PASVEC.MAC
+	add SETRAN and SAVRAN to segment
+	detect version skew between paslib.rel and passeg.exe
+272	7-Mar-83	20 only: PASLOW.MAC, PASDBG.MAC, PASDDT.MAC
+	DEBUG didn't work with sharable segment
+273	9-Mar-83	PASIO
+	Make PAGE do FF if already at end of line or CR LF FF if not.
+	This is ISO.  Previously always did CR FF.
+274	9-Mar-83	PASCMP
+	Fix two different problems wherein the compiler things that a file
+	is EXTERN when it is not.  Can result in bad fixup chains and all
+	sorts of other manifestations.
+275	9-Mar-83	PASCMP
+	Make STRING (=STRINGPTR) produce the correct Fortran descriptor
+	in EXTERN FORTRAN procedures.
+276	9-Mar-83	PASCMP
+	For tops-10, must do CLOSE, RESET before deleting listing file.
+277	10-Mar-83	10: PASUNV,PASIO,PASSTR
+	Various minor improvements:
+	  to PASSTR - FILBIX and FILBLK were using the same word!! fix in
+		PASUNV
+	  in STRSET, implement upcase and seeeol
+	  in PASIO: add SEEEOL to let you set /E in STRSET
+	  in PASIO: implement /P for protection
+300	12-Mar-83	PASCMP
+	Fix arrays with virtual origins above the low seg.  [development
+		edit only - not in TWOSEG version of compiler]
+301	18-Mar-83	20: PASIO, 10:PASMEM
+	Fix NEW.L to call NEW in section 0 instead of calling GETNEW
+	directly.  HEAP is written under the assumption that it is the only
+	thing that calls GETNEW directly.
+
+****** NB:  At the moment PASCMP and PASCAL.EXE are frozen.  All edits
+******	that are shown as being in PASCMP are actually in the development
+******  version (which is not distributed) and unless otherwise stated
+******  in PASNEW
+
+302	14-Apr-83	20: PASUNV, most .MAC files, development PASCMP.PAS
+	This edit is in the development version only.
+	Fix .MAC files to work with the PSECTed version.  Because of the
+	way PASUNV is being done, this requires only the following:
+	  - every module must have a TWOSEG
+	  - there must be a SEARCH PASUNV before the TWOSEG
+	Fixed PASCMP.PAS to do a USEPSECT before outputing the .LINK
+	pseudoop, and changed the PSECT names to .DATA., .CODE., and
+	.LARG., which is what Fortran will use.
+303	15-Apr-83	20: PASDDT,PASDBG,PASLOW,PASVEC,PASCMP
+	Make all configurations work, including sharable segment
+	Put readonly and no-cross properties in psects as appropriate
+	remove block type 1100
+	change symbol definitions to use 243 for global RH fixup
+	in WRITESYMBOL, RELOC can now be RELABS, RELRH, or REL30.  In
+		general global definitions are REL30, and the rest are
+		RELABS or RELRH.
+	use local symbol %PASYM to find the PASDDT symbol table instead
+	of .LINK, which may not work in non-zero sections.
+304	20-Apr-83	PASCMP
+	Called CHECKASSIGN for FOO((A)).  In this case, and case where
+	a constant is involved, GATTR.NOASSIGN may not be properly
+	initialized.
+305	6-May-83	PASCMP
+	Detect " not followed by a digit.
+	Also, tried to give better error messages for the most common
+	errors that novices make.
+306	May-83	10:PASSCN
+	Fix toplevel loop to kill extra pages created by PAGE.  Needed
+	to prvent blowup when running LINK
+307	18-May-83	10:PASMEM
+	Swap JSP CORERR and CAI 40.  Had them in the wrong order,
+	causing CORERR to get a random amount of memory!!
+310	7-Jul-83	PASCMP
+	Fix conformant arrays to match the final ISO standard: remove
+	kludge whereby () causes a local copy for call by ref; implement
+	normal call by value.
+311	7-Jul-83	PASCMP
+	Fix MOD to conform to ISO.
+312	7-Jul-83	PASCMP
+	Problem with passing parametric procedure from inside it.
+	Ended up adjusting basis twice.
+313	11-Jul-83	PASCMP
+	Various fixes to symbol table output for debugger.  Turned out
+	couldn't look at INPUT^, etc. for several months.  And 312 broke
+	debugger completely.
+314	13-Jul-83	PASCMP
+	In certain cases an error generates a Compiler Error before
+	the actual error message.  The Compiler Error sets FOLLOWERROR,
+	which masks the actual message.  Do not set FOLLOWERROR for
+	Compiler Error.
+315	13-Jul-83	PASNUM,PASCMP
+	Fix various errors shown by TeKoLa test suite:
+	Typo in .WRSCA was causing second word not to go the right place.
+	PACK and UNPACK when applied to PACKED ARRAY of INTEGER.  (The
+		problem is that these are not physically packed.  Required
+		introduction of a bit showing logically packed for things
+		that are not physically packed.)
+	ROUND(-n.5) should return -N+1.0  KA was OK, KI/KL were not.
+	Sparse case statements, and cases where index is out of address
+		range.  We now have two different ways to compile CASE:
+		with a jump table and CAIN/JRST pairs.
+	(. and .) are alternate forms of [ ]
+	{ and (* are equivalent. So are } and *).  You can now do (* }.
+	type ^TEXT now works.
+	set membership (IN) - needs to check the element to see if it
+		is outside the legal range of the set.  The problem is
+		that LSHC is used.  This is done modulo 2^18.  So
+		odd numbers can be shown falsely as being in the set.
+316	14-Jul-83	PASIO, PASCMP, PASCMD, PASVEC
+	Lazy I/O, limited version.  (In PASNEW.)  It was done in such
+		a way that programs compiled with PASNEW will see the
+		lazy I/O but those compiled with the old compiler
+		will not, even though both are using the same runtimes.
+317	14-Jul-83	PASCMP, PASIO
+	Fix lazy I/O to make sure that old .REL files don't get it.
+	Move improved error messages from edit 305 into PASNEW.
+320	15-Jul-83	PASCMP, PASDBG, PASIO
+	Make TTY use lazy I/O.
+	Always test for delayed laziness, even when {$C-}.
+321	15-Jul-83	PASCMP, PASIO, PASVEC, PASPSI, PASDBG
+	Test for laziness in a few more cases (PASCMP)
+	Fix the lazy I/O handler to find the FCB in any AC. (PASIO)
+	Save TTY+FILTST in PASDBG and PASPSI
+	Fix PASCMD.PAS and QUASAR.PAS nested comments.
+322	18-Jul-83	PASCMP, PASIO
+	Only in the development version.  Various cleanups of the
+	PSECT'ed code, prior to putting this version into production.
+	Failed because the PSECT'ed FORLIB has too many bugs in the
+	trig functions.
+323	18-Jul-83	PASIO
+	Typo in lazy readln

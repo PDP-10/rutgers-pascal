@@ -1,0 +1,246 @@
+	universal PASUNV - Symbols for PASCAL runtimes
+
+	;REGISTER DEFINITION
+
+	.directive .nobin
+
+	tenex==0	;all other programs search this file, so this
+			;is where the dirty work gets done.
+	pa2040==0	;this is tenex with simulator for COMND, etc.
+			; if you change this, reassemble PASIO.MAC.
+			;Note: the "vanilla" Tenex version has this off.
+	sumex==0	;meaningful only for Tenex.  If Sumex is on, you
+			; use PSTIN for reading from terminal.  If off,
+			; you use an Interlisp-styel[le]le simulation.
+	srisw=0		;test first word of file to see if it is a line
+			; number. else disable line number detection.
+			; Because of SRI EMACS bug.
+	kacpu==0	;if you change this, reassemble PASNUM.MAC
+	klcpu==1	;if you change this, reassemble PASIO.MAC
+	tops10==0
+
+	%PASVR==14		;must match PAS_VERSION in PASCMP
+
+ifn tops10,<%PASXT==0>		;not available on tops-10
+ife klcpu,<%PASXT==0>		;available only on KL systems
+ifndef %PASXT,<%PASXT==0>	;extended addressing support.
+
+define .xtend,<
+	intern	%PASXT		;make %PASXT internal for LINK to catch errors
+	sall			;suppress macro expansions
+	.direc	sfcond		; and failing conditionals
+	.direc	flblst		; and multi-line binary
+if1,<
+ife tops10,<
+ifn %PASXT,<printx Extended addressing (2060) version>
+ife %PASXT,<printx Single section (2020/2040) version>
+>;ife tops10
+>;if1
+>;.xtend
+
+	.xtend			;declare (non)extended
+
+ifn %PASXT,<
+ife klcpu,<printx ?EXTENDED ADDRESSING available only on KL-10 systems>
+ifn tops10,<printx ?EXTENDED ADDRESSING is NOT available on TOPS-10 systems>
+>;ifn %PASXT
+
+				;section 0 unused after startup
+	sn%cod==1		;code - section 1
+	se%buf==1		;non-zero if buffers get their own section
+				;(ignored if single section...)
+	stk%ns==12		;default # sections for stack
+	sn%max==37		;max legal section on the KL-10
+
+
+	t=0
+	a=1
+	b=2
+	c=3
+	d=4
+	e=5
+	f=6
+	g=7
+	h=10
+	bix=14		;called BIXREG in PASCMP, byte pointer index register
+	lbasis=bix	;ac 14 also holds 'left half' of basis at times.
+	n=15
+	o=16
+	p=17
+
+	nil=:0
+
+ife klcpu,< ;[6] start
+	define adjstk (ac,off),<
+	  ifl off, <sub ac,[xwd -off,-off]>
+	  ifge off, <add ac,[xwd off,off]>>
+	>
+ifn klcpu,<
+	define adjstk (ac,off),<
+	  adjsp ac,off>
+	> ;[6] end
+
+; ERJMP
+;   Used after jsys's that return +1 always.
+;   Tops-20 - catches the error
+;   Tenex - doesn't, but there isn't much we can do. No-op.
+; ERJRST
+;   Used after jsys's for which +1 is error return
+;   Tops-20 - ERJMP, on the theory that this might trap a few
+;		more errors
+;   Tenex - JRST, usual Tenex error code
+
+ifn tenex,< ;[5] start
+	define erjrst (x),<
+	  jrst x>
+	>
+ife tenex,<
+	define erjrst (x),<
+	  jump 16,x>
+	> ;[5] end
+
+	;DESCRIPTION OF FILEBLOCK( SEE WRITEMC)
+
+	FILPTR== 0	;pointer to filcmp
+	FILEOF== 1	;input: 0 == normal state
+			;	1 == eof or error - no more data in file (some
+			;	    errors will allow reading to continue, and
+			;	    thus will NOT set FILEOF)
+			;output:1 == normal state
+			;	0 == error (but program will abort so this will
+			;	     never show up)
+	FILEOL== 2
+	FILERR== 3	;RH - last error no, B0 - enabled for user errors
+	filjfn==4	;jfn
+	filblk==5	;RH - offset in BLKTAB for this FCB; LH free
+	filflg==6	;flags
+	filbad==7	;contents to set fileof to if error
+	filcht==10	;pointer to character mapping table
+	fils11==11
+		filadv==fils11  ;routine to get to next buffer
+	fils12==12
+		fillby==fils12	;last byte in file
+		filpbp==fils12	;physical buffer byte pointer
+	fils13==13
+		filcby==fils13	;current byte in file
+		filpbs==fils13	;physical buffer size
+	fillts==14
+	filbuf==15	;buffer for paged files:
+;;modified for extended addressing... lh=#pages, rh=first page #
+			;LH == # of pages, RH == addr of first word on page
+;filr11 through filr99 must be contiguous
+	filr11==16	;first routine
+	filget==16	;routine for GET
+	filput==17	;routine for PUT
+	filgln==20	;routine for GETLN
+	filpln==21	;routine for PUTLN
+	filclo==22	;device-dependent close actions - CLOSE and BREAK
+	filr99==23	;pointer to other routines
+	fils15==24	;another state variable
+		filpgb==fils15	;number of pages in buffer
+		filter==fils15	;place to store defered error
+	fils16==25
+		filbfp==fils16	;ptr to beginning of current page
+	fils17==26	;26 - 30 are referred to absolutely in the string code
+		filbfs==fils17	;size of page in bytes (pasio)
+		filfps==26	;first position - for getindex only (passtr)
+	fils20==27
+		fillct==fils20	;count of last record operation
+	fils21==30
+		filsvg==fils21	;save register g for retry
+	FILLNR==31	;IF ASCII MODE - LINENR IN ASCIICHARACTERS
+	FILCNT==32	;if non-text file: neg. number of words in comp.
+			;    if text file: zero
+			;test sign bit of this loc to see if an ASCII file
+	filst1==33	;state variables for special I/O modes
+		filpag==filst1	;disk page currently working on
+;;;		filttb==filst1	;buffer for tty input (pasio,pasddt,paspsi)
+	filst2==34
+		filbct==filst2	;bytes in current page (pasio)
+				;count left (passtr,pasddt,paspsi)
+	filst3==35
+		filbpt==filst3	;pointer to next byte in buffer
+	filst4==36
+		filbgp==filst4	;disk page at beginning of buffer
+	filst5==37
+		filsvf==filst5	;save register f for retry
+	filtst==40	;should be 314157 if file is open
+	filnam==41	;file name (2 words)
+	filbix==43	;base of file buffer (all byte pointers index BIX)
+	
+	FILCMP==44	;FIRST WORD OF COMPONENT
+	%PASFB==:FILCMP		;must match SIZEOFFILEBLOCK in PASCMP
+
+;locations in dispatch vector pointed to by filr99
+	f%getx==0	;getx
+	f%putx==1	;putx
+	f%putp==2	;page
+	f%setp==3	;setpos
+	f%curp==4	;curpos
+	f%init==5	;device dependent init, or cpopj - this is BREAKIN
+	f%open==6	;device dependent openfile
+	f%brk==7	;device dependent BREAK routine
+	f%ltst==10	;test for line numbered file
+	f%shln==11	;show line
+	f%fxln==12	;fix line
+define vcall(x),<	;call routine via vector - uses a, fcb in b
+	move a,filr99(b)	;get dispatch addr
+	jrst @x(a)
+>
+
+define pcall(x),<	;pushj routine via vector, uses a, fcb in b
+	move a,filr99(b)
+	pushj p,@x(a)
+>
+
+define adrs (a),<
+	irp	a,<
+	 ifidn <a><0>,<0>	;leave zero alone
+	 ifdif <a><0>,<ifiw a>	;instruction format (local) indirect word
+>>
+
+;bits in filflg
+
+	fl%lc==1	;map lower case
+	fl%ioe==2	;i/o error
+	fl%fme==4	;data format error
+	fl%ope==10	;open error
+	fl%eol==20	;show eoln char
+;note that fl%tmp goes with the jfn, not the file openning.  So it is
+;"sticky".  Even if the user reopens the file, if fl%tmp was on before,
+;it is put back.  It is cleared by any gtjfn
+	fl%tmp==40	;temp file (delete when doing rljfn)
+	fl%buf==<point 6,0,29> ;amount of buffering (number or pages)
+	fl%mod==<point 5,0,23> ;Pascal internal I/O mode
+	  fm%byt==1	;bin/bout
+	  fm%map==2	;pmap
+	  fm%tty==3	;texti/bout
+	  fm%nul==4	;popj
+	  fm%wrd==5	;sin/sout 36 bit buffered - unidirectional
+	  fm%chr==6	;sin/sout buffered - unidirectional
+	  fm%rec==7	;sinr/soutr record
+	  fm%lst==7	;last legal mode
+	fl%lzy==400000	;lazy I/O is default (unless interactive)
+			;this simply tells us whether the compiler is
+			;newer than edit 316.  It is not a user choice.
+
+;bits in LH(c) for open
+
+	op%tty==1b0	;get file name from tty
+	op%wld==1b1	;allow wildcards
+
+define	skpwrt(x),<
+ ife x,<skipe filbad(b)>
+ ifn x,<skipe filbad(x)>
+  >
+define	skprea(x),<
+ ife x,<skipn filbad(b)>
+ ifn x,<skipn filbad(x)>
+ >
+
+define	errmsg	($txt),<
+	hrroi	a,[asciz/$txt/]
+	esout%
+>;errmsg
+
+	end

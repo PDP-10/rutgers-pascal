@@ -1,0 +1,491 @@
+This lecture will cover a subset of Pascal that is more or less
+equivalent in power to Fortran.  I assume that you already know how to
+program in some conventional high-level language.
+
+
+
+A sample program:
+
+PROGRAM MINMAX(INPUT,OUTPUT);
+
+{This program reads 20 numbers and prints the maximum and minimum}
+
+CONST N=20;
+
+VAR I,U,V,MIN,MAX:INTEGER;
+    A:ARRAY[1..N] OF INTEGER;
+
+BEGIN
+FOR I := 1 TO N DO
+  READ(A[I]);
+MIN := A[1]; MAX := MIN;
+FOR I := 2 TO N DO
+  BEGIN
+  IF A[I] < MIN
+    THEN MIN := A[I];
+  IF A[I] > MAX
+    THEN MAX := A[I]
+  END;
+WRITE('Maximum: ',MAX);
+WRITE('Minimum: ',MIN)
+END.
+
+
+Note overall form of the program:
+  PROGRAM heading
+  LABEL section
+  CONST section
+  TYPE section
+  VAR section
+  PROCEDURE and FUNCTION declarations
+  BEGIN main body END.
+Note that all variables must be defined in the VAR section.  No automatic
+declarations as in Fortran or PL/I.
+
+Lexical details:
+  free format.  words must be kept contiguous, but can be separated by
+	any number of spaces or new lines.  New line = blank
+  no column restrictions - program can go anywhere on a line
+  comments with {}.  A comment is syntactically equivalent to a space.
+  identifiers:  user-defined names (variables, procedures, ...).
+	1 to N alphanumerics, 1st alphabetic.  N is implementation
+	defined, but must be at least 8.  Names longer than N are
+	legal, but are confused.
+  reserved words:  words built into the language, e.g. BEGIN, IF.  Can't
+	use as variable names.
+  integers:  123, -456, digits with possible - sign
+  real numbers:  1.2, 5E21, 2.13E-3.  Must have either decimal pt. or E.  If
+	decimal pt, must have at least one digit both before and after it.
+	.2 and 1. are both illegal.
+  strings:  'ABC',  'DON''T'  (use two '' to put one into string).  But
+	'A' is a CHAR, not a string
+
+Variables:
+  each variable must be declared in the VAR section.  It must have a "type"
+	associated with it.  The simplest types are INTEGER and REAL.  We
+	will see more complex ones later.
+    A,B,C:REAL
+  also Boolean, which can have value TRUE or FALSE.  (TRUE and FALSE are
+	constants built into the language).
+    B:BOOLEAN;  ....  B := TRUE;  ... IF B THEN ...
+
+Constants:
+  a constant may be written out, e.g. 1.23
+  or an identifier declared in the CONST section
+	A = 1.23; B = 55
+
+Expressions:
+  numerical:  constants and variables, with operators + - * /, and ().
+	+ - * are real if either arg is real, integer if both are integer
+	/ is always real
+	no exponentiation (use LOG)
+	MOD and DIV for integers
+  Boolean:  constants, variables, and results of comparisons, with
+    operators AND OR NOT.
+	The comparisons are <  <=  =  >=  >  <>       <> is not equal
+	example:  IF (X < Y+2) OR (Y = Z) OR FREE
+  operator precedence:
+	()
+	NOT
+	* / DIV MOD AND
+	+ - OR
+	< <= = >= > <> IN
+    note the horrible consequences:
+	IF A > B AND C < D   ==>  IF A > (B AND C) < D - probably wrong
+	must use IF (A > B) AND (C < D)
+
+Statements:
+  assignment
+	X := 10
+	A := A + 1
+       uses := so you can tell assignment from comparison
+    The left and right sides must have exactly the same type, except that
+	you can assign an integer to a real:
+	    REALVAR := 1
+	You can't assign a real to an integer (there are explicit ROUND
+	and TRUNC functions to let you do this).
+    This is particularly frustrating with strings.  If you have a variable
+	that accepts a 10-character string, you can't assign '123456789'
+	to it.
+
+  WHILE statement:  
+	WHILE I < 20 DO
+	   I := I + 2
+    Note that the WHILE statement allows exactly 1 statement in the loop.
+    To do more than one thing, use BEGIN END to turn a group of statements
+    into one:
+	WHILE I < 20 DO
+	  BEGIN I := I + 2; WRITE(I) END
+    Note the use of semicolons:  they separate lists of statements between
+    begin and end.  It is best to think of BEGIN and END as ( and ), with
+    ; acting like , to separate items in a list.
+	WHILE statement:  the test is done before the body.  That is,
+	  if I is initially >= 20, the body is never done.
+
+  FOR statement:
+	FOR I := 1 TO 20 DO
+	   WRITE(3*I)
+    Loop is done 20 times.  I takes on values from 1 to 20.
+    No BY clause.
+    Always steps by 1.  To go backwards:
+	FOR I := 20 DOWNTO 1 DO ...
+    The body is exactly one statement.  To do more than one thing, BEGIN END
+	FOR I := 1 TO 20 DO
+	   BEGIN X := I*3;  WRITE(X) END
+
+    IF-THEN-ELSE statement:
+	IF I > X
+	  THEN WRITE('I is bigger')
+	  ELSE WRITE('X is at least as big')
+    The ELSE is optional.
+    The IF is any Boolean expression.
+    The THEN and ELSE are single statements.  To do more than one thing,
+      BEGIN END.  Note that IF statements can nest:
+	IF I > X
+	  THEN IF Y > I
+	    THEN WRITE('Y is biggest')
+	    ELSE WRITE('I is biggest')
+	  ELSE IF Y > X
+	    THEN WRITE('Y is biggest')
+	    ELSE BEGIN WRITE('X is biggest'); MAX := X END
+
+  REPEAT statement
+	REPEAT 
+	  X := X + 1;
+	  WRITE(X + 2)
+	 UNTIL X > LAST
+    This is the only form that allows more than one statement inside
+      without BEGIN-END.  REPEAT-UNTIL are sort of a builtin BEGIN-END.
+    UNTIL test is done after the loop.  So the loop is always done at
+      least once.
+
+  CASE statement
+	CASE I+2 OF
+	  1: WRITE('It is a one');
+	  2: WRITE('It is a two');
+	  3,4,5: WRITE('It is 3, 4, or 5')
+	  END
+    You can use any scalar type.  Not just integers, but CHAR, BOOLEAN,
+    and user-defined types such as COLOR:
+	CASE CH OF
+	  'A','B','C','D','E','F','G','H','I','J','K','L','M',
+	  'N','O','P','Q','R','S','T','U','V','W','X','Y','Z':
+	      WRITE('ALPHABETIC');
+          '1','2','3','4','5','6','7','8','9','0': WRITE('NUMERIC')
+	  END;
+    Note that there is no way to say 'A'..'Z'.  There is an OTHERWISE
+    in the proposed Pascal standard, but not in the current standard.
+    DEC-20 Pascal allows OTHERS.
+
+  GOTO
+	IF X > 2
+	  THEN BEGIN WRITE('ILLEGAL SYNTAX'); GOTO 666 END
+    GOTO is one word
+    The label is always a number
+    Labels must be declared in the label section, and defined with a colon:
+	PROGRAM TEST(INPUT,OUTPUT);
+	LABEL 666;
+	VAR X:INTEGER;
+	BEGIN
+	READ(X);
+	IF X > 2  THEN GOTO 666;
+	WRITE(X);
+ 666:	WRITE('THE END')
+	END.
+
+Arrays:
+   You must declare any array in the VAR section:
+	X,Y: ARRAY[0..100]OF INTEGER
+   Note that you specific lower and upper bounds.  These may be zero or
+     negative.  Must be integers.  To access an element, use brackets:
+	X[1] := X[P] + 1;
+   Two dimensional arrays are theoretically just arrays of array:
+	TWODIM: ARRAY[0..10] OF ARRAY[0..10] OF INTEGER
+     But no one wants to type that out.  The following is exactly
+     equivalent:
+	TWODIM: ARRAY[0..10,0..10] OF INTEGER
+   You can access two dimensional arrays either way:
+	TWODIM[I,I] := TWODIM [I] [I] + 1
+   You can assign arrays:
+	X := Y
+     But no other operation will work.  The two arrays must have exactly
+     the same type.
+   
+Simple numerical I/O:
+   Any file you are going to use must be listed in the PROGRAM statement.
+   If you just have one input and one output, you normally call them
+   INPUT and OUTPUT.  This is most convenient because INPUT and OUTPUT
+   are predeclared, and are the defaults for READ and WRITE.  So if
+   you say
+	PROGRAM TEST(INPUT,OUTPUT)
+   you can just use READ(X) and WRITE(Y).  If you have no input, leave
+   out the INPUT.
+	READ(X,Y,Z) - read into variables X, Y, and Z.  Skips blanks
+	  and end of line.  "free format" read.
+	WRITE(X,Y,X+2,'hi there') - writes out values of X, Y, X+2,
+	  and the message hi there (without quotes).
+	WRITELN(X) - like WRITE(X), but puts an end of line after it.
+	WRITELN alone can be used to go to a new line
+
+
+
+			PROCEDURES and FUNCTIONS
+
+Let us start with a PROCEDURE.  A procedure is equivalent to a
+SUBROUTINE subprogram in Fortran and an un-typed PROCEDURE in PL/I.
+It is way of taking some part of your program and encapsulating
+it into a self-contained module.  Whenever that part is needed,
+it is called for by name.  There are two major advantages to using
+PROCEDURES:
+  - that a piece of code can appear just once but be called
+	from many different parts of the program
+  - that low-levels details can be moved into procedures, so
+	that the main body of the program doesn't need to be
+	cluttered up with them.
+
+An example:
+
+	program demo(output);
+
+	var i:integer;
+	    y:real;
+
+	procedure panswer(y:integer);
+	{Panswer prints an answer.  If the number is "reasonable",
+	 it prints it using a legible format, e.g. 123.4567.  But
+	 if it is too small or too large for this format, the
+	 more general E format is used}
+		begin
+		if (x > 0.0001) and (x < 1000)
+			then writeln('the answer is',x:10:4)
+			else writeln('the answer is',x)
+		end;
+
+	procedure done;
+		begin
+		writeln('Thats all, folks')
+		end;
+
+	begin
+	for i := 1 to 10 do
+	  begin
+	  y := i * i;
+	  panswer(y)
+	  end;
+	done
+	end.
+
+ - procedures are declared after the VAR section of the program,
+	but before the main BEGIN-END body.
+ - a procedure declaration looks like a small program.  It can
+	have all the sections of a program: label, const,
+	var, etc.  The only difference is that the first statement
+	is the PROCEDURE header instead of a PROGRAM header.
+ - to call a procedure, just mention its name.  Do *not* say CALL.
+
+Any time PANSWER appears in the main program, all the statements
+inside the definition of PANSWER get executed.  When the last
+statement in the procedure is finished, control returns to the
+statement following the call to the procedure.
+
+How parameters are passed:
+  - parameters are listed inside parentheses after the procedure
+	name.  If there are no parameters, the entire list is
+	omitted.  No parentheses either.  The syntax used is
+	the same as for declaring variables in a VAR section:
+
+    procedure onearg(i:integer)
+    procedure twoarg(i:integer;j:integer)   
+    procedure twomore(i,j:integer)  {same effect as twoarg}
+    procedure threearg(i,j:integer;k:real)
+    procedure noarg
+
+  - when you call the procedure, you supply one expression
+	for each parameter.  Pascal will evaluate each expression
+	and set the corresponding parameter to that value.
+
+     procedure f(i,j:integer;x:real);
+
+	Whenever you call F, you must supply two integers and one
+	real, the order INTEGER, INTEGER, REAL.  Pascal assigns the
+	first integer to I, the second to J, and the real to X.
+	Then it executes the body of the procedure.
+
+     procedure f(i,j:integer);
+	begin
+	writeln(i+j)
+	end;
+     ...
+     f(3,4)
+     ...
+
+	f(i,j:integer) requires two integers.  In this case 3 and 4
+	are supplied.  So I is set to 3 and J to 4.  Then the body
+	is executed.  In this case it will print I+J, which is 7.
+
+A note on names:
+
+Note that all names defined within the procedure are available
+only within the procedure:
+
+program test(output);
+var x,y:integer;
+procedure demo(i:integer);
+  var x,z:integer;
+  begin
+  x := i*i;
+  z := x*i;
+  writeln(x,z);
+  y := z
+  end;
+begin
+x := 1;
+y := 2;
+demo(x,y)
+end.
+
+The X inside DEMO is a different variable than the one defined in
+the main program.  X := I*I sets the X inside the procedure.
+X := 1 is in the main program, and thus sets the X defined there.
+Note that Z can be referenced within either the main program or
+the subroutine.  In general you can "see out of" a procedure, but
+not "into" it.  That is:
+  - inside a procedure you can refer to either variables defined
+	in the procedure or those defined in the main program.
+	[the one exception is that when a variable inside and one
+	outside have the same name, you can't refer to the outside
+	one.  any reference to that name gets the inside variable.]
+  - outside a procedure you cannot refer to any variable inside
+	the procedure
+The names of parameters are considered to be inside the procedure.
+
+
+
+Call by reference:
+
+Suppose you want to be able to change the values of variables
+from inside a procedure.  Consider the following:
+
+    procedure p(i:integer);
+	begin
+	i := i*i
+	end;
+
+    begin
+    j := 2;
+    p(j);
+    writeln(j)
+
+This will write "2".  The call P(J) will set I to 2 and then
+execute the body of the procedure.  The body of the procedure
+sets I to 4, but does not change J.  That is, it is like doing
+this:
+   j := 2;
+   i := j;
+   i := i*i;
+   writeln(j)
+
+Sometimes you want to be able to change a variable from inside
+the procedure.  In this case, put a VAR in front of the parameter:
+
+    procedure p(var x,y:integer;z:integer);
+	begin
+	x := z*z;
+	y := z*x;
+	z := y
+	end;
+
+    begin
+    a := 1; b := 2; c := 3;
+    procedure(a,b,c);
+    writeln(a,b,c)
+    end
+
+In this case X and Y are called by reference.  That is any time you
+refer to X and Y inside the procedure, you really mean the variable
+that matched them in the call, A and B.  The values of A and B are
+not copied when the call is made.  Rather these variables themselves
+are used.  So any change that is made to X and Y changes A and B.
+C however is copied into Z.  The example above will print
+	9	27	3
+
+Note that names don't matter.  Suppose you have
+    procedure p(var i,j:integer);
+	...
+    p(j,i)
+Now J on the outside corresponds to I on the inside and visa versa.
+
+Reference parameters must corresond to variables, since that is the
+only thing whose value can be changed.  Normal ("value") parameters
+can correspond to any kind of expression, since the value of the
+expression is only assigned.
+
+
+Functions:
+
+A function is like a procedure, but it returns a value.  A function
+is called from within an expression, rather than as a separate
+statement.  E.g. if F is a function, you might write:
+
+   x := 2 * f(1,2) + 3
+
+First F is called, with the values 1 and 2.  The result is multplied
+by 2 and 3 is added.
+
+function f(i,j:integer):integer;
+  var x:integer;
+  begin
+  x := 2*i + 3*j;
+  f := x
+  end;
+
+Note the extra ":integer" in the header.  This means that F returns an
+integer value.  The insides of a function are just like the insides
+of a procedure, with one addition:  You have to say what the function
+returns.  This is done by using the name of the function on the left
+side of an assignment.
+
+    f := x
+
+So the function returns the value of X.  This assignment can be
+anywhere inside the function.  You can do such assignments more than
+once.  You cannot, however, use the name of the functionn on the
+right side of an assignment to look at the current value.  Any
+appearance of the function name on the right side of an assignment
+is assumed to be a CALL of the function.
+
+By the way, the above statement  x := 2 * f(1,2) + 3 assigns
+19 to X.  F(1,2) returns 8.
+
+There are a number of functions and procedures built into Pascal.  Here
+are some of them.  Unless otherwise stated, they return the same
+type of variable as they accept.  That is, ABS(-123) is 123, an integer,
+but ABS(-123.0) is 123.0, a real.
+
+   abs(x) - absolute value. integer or real
+   sqr(x) - square.  integer or real
+   odd(x) - TRUE if X is odd, otherwise FALSE.  integer
+   succ(x) - x must be a denumerable type.  returns the next thing.
+	e.g.
+	TYPE
+	  COLOR=(RED,BLUE,GREEN)
+	...
+	C := SUCC(RED);   {sets C to BLUE}
+   pred(x) - x must be a denumerable type.  returns the previous thing
+   ord(x) - x must be a denumerable type, or CHAR.  returns the internal
+	code for X.  For enumerated types, the first is 0, the second 1,
+	etc.  That is ORD(RED) is 0, ORD(BLUE) is 1, etc.  For CHAR,
+	this gives you the ASCII (or EBCDIC, if IBM) code for the character
+   char(x) - x must be an integer.  Gives you the character whose ASCII
+	(or EBCDIC if IBM) value is x.  ORD(CHR(X)) = X
+   trunc(x) - x real - returns an integer.  Throws away everything
+	after the decimal point.
+   round(x) - x real - returns an integer.  Rounds, i.e. .5 or greater is
+	rounded up.
+   eoln(x) - x a text file - TRUE if X^ is an end of line, else FALSE
+   eof(x) - x a file - TRUE if X^ is beyond the last item in the file,
+	else FALSE
+   sin(x), cos(x), arctan(x) - x real - trig functions.  Uses radians
+   exp(x) - x real - e to the x power
+   ln(x) - x real - natural log of x
+   sqrt(x) - x real - square root of x

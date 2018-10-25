@@ -1,0 +1,66 @@
+"/This file is for version 4 of the EXEC.  If you are running
+  release 3 or 3A, see the file FILDDT.DDT./
+
+"/These are patches to the version 4 exec to make it understand PASCAL.
+  As written, pascal will replace SNOBOL as a known processor.  Any
+  other processor can be replaced if you use its index instead of 4.  To
+  see the indices of the various processors, look at LTAB.  The offsets
+  from LTAB are the indices./
+
+"/If you are using DDT rather than FILDDT, you may need to turn on
+  creation of non-existent pages, or the $< command will fail:/
+
+W
+
+"/The following patch causes Pascal to be processed the same way as
+  fortran:  a run switch is used to run LINK, rather than the exclamation
+  point kludge.  This is because both use SCAN.  The CAIE is to be 
+  inserted before a CAIN P4,LT.FOR.  Please check P1LUP+7 to be sure that
+  it hasn't moved an instruction or two.  If an index other than 4 is
+  to be used, this is CAIE P4,INDEX/
+
+p1lup+7/<caie p4,4>
+
+"/The following patch is optional.  It sets things up so PASDDT is used
+  as the debugger for PASCAL.  Normally you pass DEBUG:NAME for language
+  NAME.  Instead we cause module PASDDT to be loaded.  If an index other
+  than 4 is to be used, the patch at SETDEB is MOVEI B, INDEX/
+
+pat..+0/pas1:hrroi b,pat..+4
+pat..+1/pushj p,tsout0
+pat..+2/tlz p1,2000
+pat..+3/jrst eolout
+pat..+4/"/SYS:PASDDT/
+
+pat..+7/pat..:
+
+"/The symbol DEBAID is in a TRVAR or STKVAR.  Thus it is not really in
+  the DDT symbol table.  Instead it will show as some offset from
+  AC 15.  E.g. in our version DEBAID is 165(15).  To see what it is in
+  your version open the location SETDEB+6, by typing SETDEB+6 and
+  then a slash.  This will be a MOVEM instruction.  Its effective
+  address is DEBAID.  E.g. in our version SETDEB+6 is MOVEM B,165(15).
+  Thus we use 165(15) for DEBAID in the patch below.  Please be sure
+  to replace DEBAID below by xxx(15), or this patch will not work./
+
+setdeb/<movei b,4
+pat..+1/camn b,debaid
+pat..+2/jrst pas1>
+
+"/The following are changes to the tables needed to make PASCAL known.
+  If an index other than 4 is to be used, the offsets from LTAB, SIXTAB,
+  PRTAB, and DBTAB should be that index.  Note that this does not add
+  a switch PASCAL to specify the language.  That table (NAMES) must be
+  in alphabetical order and thus is nearly impossible to patch in DDT./
+
+pat../"/SYS:PASCAL.EXE/
+pat..+3/"/PAS.TMP/
+pat..+5/"/:PASCAL/
+
+ltab+4/"/PAS/
+sixtab+4/"/PAS/
+prtab+4/pat..,,pat..+3
+dbtab+4/pat..+5
+
+pat..+7/pat..:
+

@@ -1,0 +1,6 @@
+compile 'A
+maklib
+pasuns=pasuns/mas:'A,'A/rep:'A
+psxlib=psxlib/mas:'A,'A/rep:'A
+
+do passeg.ctl

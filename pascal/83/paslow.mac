@@ -1,0 +1,196 @@
+title PASLW1 - for NEW/DISPOSE
+entry dispos
+intern new,is.ful,%cclsw
+extern xdisp.,xnew.
+	%cclsw=100
+	dispos=xdisp.
+	new=xnew.
+	is.ful==1
+	prgend
+;we put %CCLSW up here because we want to force PASLW2 to always be
+;loaded if PASLW1 isn't.  Some programs don't use NEW, so we need something
+;that is always required.
+title PASLW2 - for MARK/RELEASE
+entry new,%cclsw
+intern is.ful
+extern getnew
+	%cclsw=100
+	new=getnew
+	is.ful==0
+	prgend	
+
+	title PASLOW - symbols for use with sharable segment
+
+comment \
+
+This module generates the .REL file that is loaded with a Pascal
+program when it is using the sharable segment.  It will probably
+be named PASLIB.REL in such applications.  This module has three
+parts:
+  - definitions of all variables that must be known to both the sharable
+	segment and compiled code.  They are actually located in the
+	sharable segment.  These are just definitions. Needless to say,
+	the declarations here must agree with those in PASSEG.MAC,
+	which generates the sharable segment.  Note that a few 
+	variables are set up before the sharable segment is loaded.
+	At the moment we put those down in unused parts of the job
+	data area.  If necessary, they could go on the page before
+	the sharable segment.
+  - definitions of all code in the sharable segment, so compiled code
+	can call it.  In order to allow changes in the segment, it
+	begins with a jump table.  That table is in a fixed order.
+	What is here is just definitions of the entries in that table.
+	In order to make sure they agree, both this module and
+	the segment use a common file, PASVEC, to define the elements
+	of the jump table.  Here is what is actually in that table:
+	  - hiseg to hiseg + 7:  LINK sets up a "vestigial job data area"
+  	  - hiseg + 7 to hiseg + 207:  table used for character mapping
+	  - hiseg + 210: beginning of actual entries.
+  - finally, we have one piece of code, which loads the sharable segment.
+\
+	
+
+	search pasunv
+
+;When I search MONSYM, I keep getting the SIN jsys as well as the
+;SIN function.  The only solution I have found is to define the
+;JSYS's I need by hand
+
+opdef gtjfn [jsys 20]
+opdef gevec [jsys 205]
+opdef get   [jsys 200]
+opdef sevec [jsys 204]
+opdef esout [jsys 313]
+opdef haltf [jsys 170]
+opdef xmovei [415000000000]
+gj%old==<100000,,0>
+gj%sht==<1,,0>
+gt%adr==200000
+.fhslf==400000
+
+
+	entry pasif.
+	intern %rnnam,%rnppn,%rndev,%ccldn,lstnew,pasdd.
+	extern is.ful
+
+	lowseg==660000		;must agree with PASSEG.CTL
+	hiseg==710000
+
+	.segvr==lowseg
+
+	subttl definitions of the low segment
+
+;DEFVAR is used to define a variable in the lowseg
+;DEFBLK is the same, but defines more than one word
+
+define defvar(nam),<intern nam
+	nam=.segvr
+	.segvr==.segvr+1>
+define defblk(nam,siz),<intern nam
+	nam=.segvr
+	.segvr==.segvr+siz>
+
+defblk input,45
+defblk output,45
+defblk tty,45
+defblk ttyout,45
+;%cclsw=100	;this is in PASLW1 or PASLW2
+%rnnam=101
+%rnppn=102
+%rndev=103
+%ccldn=104
+defvar pddt.
+lstnew=105
+didget=106
+defvar in.ddt
+defvar stk.bt
+defvar ful.ca
+
+ifn klcpu,<
+defvar lstnwl
+defvar sn.cod
+defvar sn.hep
+>;ifn klcpu
+
+	subttl definitions for the high segment
+
+	.stchm==hiseg+10	;the character mapping table is here
+
+	.dspad==hiseg+210	;the dispatch vector starts here
+
+;DEFVEC occurs in the file PASVEC.MAC - it takes as an argument one
+;  routine name.  In this module, we want to define a symbol for it
+;  for use in the user's code.
+
+define defvec(ent),<intern ent
+	ent=.dspad
+	.dspad==.dspad+1>
+
+;DEFAKE is similar to DEFVEC, but takes two arguments.  The first
+;  name is used in this module, while the second one is used in
+;  generating the segment.  This is used to handle odd cases where
+;  there are two versions of some code.
+
+define defake(ent,ign),<
+	intern ent
+	ent=.dspad
+	.dspad==.dspad+1>
+
+define defarb(ent,ign),<
+	intern ent
+	ent=.dspad
+	.dspad==.dspad+1>
+
+define defdum(ign),<>
+
+	twoseg 400000
+
+pasif.:	skipe didget		;already have segment?
+	jrst pasif		;yes - go to real code
+	dmove f,a		;save the AC's
+	dmove h,c
+	movsi a,(gj%old!gj%sht)
+	hrroi b,[asciz /sys:passeg.exe/]
+	gtjfn
+	 jrst noseg
+	move c,a		;save JFN
+	movei a,.fhslf		;save our entry vector
+	gevec
+	exch c,b		;save it in C, get back JFN
+	move a,b		;to A
+	hrli a,.fhslf		;merge with us
+	tro a,gt%adr		;don't change jobdat
+	move b,[xwd <lowseg/1000>,777]
+	get
+	movei a,.fhslf		;now put back the entry vector
+	move b,c
+	sevec
+	setom didget		;say we now have the segment
+	movei a,is.ful
+	movem a,ful.ca		;tell the world whether we are fancy
+	dmove a,f
+	dmove c,h
+	jrst pasif		;first thing in vector is the real pasif.
+
+	.lnkend 1,77
+
+;this is so the user can type START PASDDT
+pasddt:	movei a,ddtdb.
+	movem a,74
+proggo:	movei a,.fhslf
+	gevec
+	jrst (b)
+
+;we need a special version of ddtdb. with the sharable segment because
+;ddtdb. isn't mapped in yet
+	jrst ddtdb.-2
+	jrst ddtdb.-1
+pasdd.:	skipe didget		;if we have the segment
+	jrst ddtdb.		;go there
+	jrst proggo		;else start the program
+
+noseg:	hrroi a,[asciz /Can't find sys:passeg.exe/]
+	esout
+	haltf
+	jrst .-1
+
